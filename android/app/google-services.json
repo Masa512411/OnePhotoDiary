@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "342135105622",
+    "project_id": "onephotoapp-9a008",
+    "storage_bucket": "onephotoapp-9a008.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:342135105622:android:72904d6aa9cbc605d373f7",
+        "android_client_info": {
+          "package_name": "com.example.one_photo_diary"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDbtkTYIQuoYZz0xC5mfpShqwKe10tf7GI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
