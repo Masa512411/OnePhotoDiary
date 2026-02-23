@@ -33,6 +33,7 @@ class _CameraScreenState extends State<CameraScreen> {
       }
     } catch (e) {
       // エラーハンドリング (権限がない場合など)
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('カメラの起動に失敗しました: $e')),
       );

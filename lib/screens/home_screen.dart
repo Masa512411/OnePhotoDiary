@@ -121,7 +121,7 @@ class _HomeScreenState extends State<HomeScreen> {
       floatingActionButton: FloatingActionButton(
         onPressed: () {
           // TODO: カメラ起動処理
-          print('Camera button tapped');
+          debugPrint('Camera button tapped');
         },
         backgroundColor: Colors.blueGrey,
         child: const Icon(Icons.camera_alt),
