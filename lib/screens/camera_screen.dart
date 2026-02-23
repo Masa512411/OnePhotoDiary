@@ -22,7 +22,6 @@ class _CameraScreenState extends State<CameraScreen> {
     try {
       final XFile? photo = await _picker.pickImage(source: ImageSource.camera);
       if (photo != null) {
-        // 写真をアプリのドキュメントディレクトリに移動（永続化のため）
         final directory = await getApplicationDocumentsDirectory();
         final fileName = path.basename(photo.path);
         final savedImage = await File(photo.path).copy('${directory.path}/$fileName');
@@ -32,8 +31,6 @@ class _CameraScreenState extends State<CameraScreen> {
         });
       }
     } catch (e) {
-      // エラーハンドリング (権限がない場合など)
-      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('カメラの起動に失敗しました: $e')),
       );
@@ -41,7 +38,6 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   void _proceedToSelection() {
-    // TODO: 選択画面への遷移
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('選択画面へ進みます（未実装）')),
     );
@@ -69,12 +65,11 @@ class _CameraScreenState extends State<CameraScreen> {
             style: TextStyle(color: Colors.grey),
           ),
           const SizedBox(height: 40),
-          // 撮影した写真のプレビュー
           Expanded(
             child: GridView.builder(
               padding: const EdgeInsets.all(16),
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2, // 2列で表示
+                crossAxisCount: 2,
                 crossAxisSpacing: 10,
                 mainAxisSpacing: 10,
               ),
@@ -111,7 +106,6 @@ class _CameraScreenState extends State<CameraScreen> {
               },
             ),
           ),
-          // アクションボタン
           Padding(
             padding: const EdgeInsets.all(32.0),
             child: Column(

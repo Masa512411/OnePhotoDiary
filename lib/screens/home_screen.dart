@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'camera_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -38,6 +39,14 @@ class _HomeScreenState extends State<HomeScreen> {
         _focusedDay = focusedDay;
       });
     }
+  }
+
+  void _openCamera() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const CameraScreen(),
+      ),
+    );
   }
 
   @override
@@ -119,10 +128,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // TODO: カメラ起動処理
-          debugPrint('Camera button tapped');
-        },
+        onPressed: _openCamera,
         backgroundColor: Colors.blueGrey,
         child: const Icon(Icons.camera_alt),
       ),
@@ -187,9 +193,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 8),
           TextButton(
-            onPressed: () {
-              // TODO: カメラ起動
-            },
+            onPressed: _openCamera,
             child: const Text('写真を撮る'),
           ),
         ],
