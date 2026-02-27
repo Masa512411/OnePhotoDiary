@@ -1,8 +1,11 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'camera_screen.dart';
+import 'selection_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -15,12 +18,29 @@ class _HomeScreenState extends State<HomeScreen> {
   CalendarFormat _calendarFormat = CalendarFormat.month;
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
+  List<File> _pendingPhotos = [];
 
   @override
   void initState() {
     super.initState();
     _selectedDay = _focusedDay;
     initializeDateFormatting('ja_JP');
+    _checkPendingPhotos();
+  }
+
+  // 画面に戻ってきたときに再度チェックする
+  Future<void> _checkPendingPhotos() async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<String>? photoPaths = prefs.getStringList('pending_photos');
+    if (photoPaths != null && photoPaths.isNotEmpty) {
+      setState(() {
+        _pendingPhotos = photoPaths.map((p) => File(p)).toList();
+      });
+    } else {
+      setState(() {
+        _pendingPhotos = [];
+      });
+    }
   }
 
   // TODO: 実際のデータをFirestoreから取得するように変更する
@@ -41,12 +61,22 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _openCamera() {
-    Navigator.of(context).push(
+  void _openCamera() async {
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => const CameraScreen(),
       ),
     );
+    _checkPendingPhotos();
+  }
+
+  void _openSelection() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => SelectionScreen(photos: _pendingPhotos),
+      ),
+    );
+    _checkPendingPhotos();
   }
 
   @override
@@ -63,6 +93,32 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Column(
         children: [
+          if (_pendingPhotos.isNotEmpty)
+            GestureDetector(
+              onTap: _openSelection,
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.blueGrey.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.blueGrey.shade200),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.photo_library, color: Colors.blueGrey),
+                    const SizedBox(width: 16),
+                    const Expanded(
+                      child: Text(
+                        '今日の写真が未選択です\nタップして「今日の一枚」を選びましょう',
+                        style: TextStyle(color: Colors.blueGrey),
+                      ),
+                    ),
+                    const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.blueGrey),
+                  ],
+                ),
+              ),
+            ),
           TableCalendar(
             locale: 'ja_JP',
             firstDay: DateTime.utc(2020, 1, 1),

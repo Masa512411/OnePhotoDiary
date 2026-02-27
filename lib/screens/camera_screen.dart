@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'selection_screen.dart';
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -13,8 +15,30 @@ class CameraScreen extends StatefulWidget {
 
 class _CameraScreenState extends State<CameraScreen> {
   final ImagePicker _picker = ImagePicker();
-  final List<File> _takenPhotos = [];
+  List<File> _takenPhotos = [];
   final int _maxPhotos = 3;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadExistingPhotos();
+  }
+
+  Future<void> _loadExistingPhotos() async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<String>? photoPaths = prefs.getStringList('pending_photos');
+    if (photoPaths != null && photoPaths.isNotEmpty) {
+      setState(() {
+        _takenPhotos = photoPaths.map((p) => File(p)).toList();
+      });
+    }
+  }
+
+  Future<void> _savePendingPhotos() async {
+    final prefs = await SharedPreferences.getInstance();
+    final paths = _takenPhotos.map((f) => f.path).toList();
+    await prefs.setStringList('pending_photos', paths);
+  }
 
   Future<void> _takePhoto() async {
     if (_takenPhotos.length >= _maxPhotos) return;
@@ -29,6 +53,7 @@ class _CameraScreenState extends State<CameraScreen> {
         setState(() {
           _takenPhotos.add(savedImage);
         });
+        await _savePendingPhotos();
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -38,8 +63,10 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   void _proceedToSelection() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('選択画面へ進みます（未実装）')),
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => SelectionScreen(photos: _takenPhotos),
+      ),
     );
   }
 
