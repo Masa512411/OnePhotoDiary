@@ -47,3 +47,7 @@ app.*.map.json
 
 # Environment variables
 .env
+
+# Firebase configuration (contains sensitive API keys)
+google-services.json
+GoogleService-Info.plist

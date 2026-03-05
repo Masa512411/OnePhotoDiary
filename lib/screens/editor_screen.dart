@@ -1,25 +1,25 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/photo_provider.dart';
 
-class EditorScreen extends StatefulWidget {
+class EditorScreen extends ConsumerStatefulWidget {
   final File selectedPhoto;
 
   const EditorScreen({super.key, required this.selectedPhoto});
 
   @override
-  State<EditorScreen> createState() => _EditorScreenState();
+  ConsumerState<EditorScreen> createState() => _EditorScreenState();
 }
 
-class _EditorScreenState extends State<EditorScreen> {
+class _EditorScreenState extends ConsumerState<EditorScreen> {
   final TextEditingController _captionController = TextEditingController();
 
   Future<void> _saveDiary() async {
     // TODO: Firestoreやローカルに保存する処理
     
     // 保存完了後、未選択の写真をクリアする
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('pending_photos');
+    await ref.read(pendingPhotosProvider.notifier).clear();
 
     if (!mounted) return;
 

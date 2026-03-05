@@ -1,77 +1,16 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as path;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/photo_provider.dart';
 import 'selection_screen.dart';
 
-class CameraScreen extends StatefulWidget {
+class CameraScreen extends ConsumerWidget {
   const CameraScreen({super.key});
 
   @override
-  State<CameraScreen> createState() => _CameraScreenState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    final takenPhotos = ref.watch(pendingPhotosProvider);
+    final maxPhotos = PhotoNotifier.maxPhotos;
 
-class _CameraScreenState extends State<CameraScreen> {
-  final ImagePicker _picker = ImagePicker();
-  List<File> _takenPhotos = [];
-  final int _maxPhotos = 3;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadExistingPhotos();
-  }
-
-  Future<void> _loadExistingPhotos() async {
-    final prefs = await SharedPreferences.getInstance();
-    final List<String>? photoPaths = prefs.getStringList('pending_photos');
-    if (photoPaths != null && photoPaths.isNotEmpty) {
-      setState(() {
-        _takenPhotos = photoPaths.map((p) => File(p)).toList();
-      });
-    }
-  }
-
-  Future<void> _savePendingPhotos() async {
-    final prefs = await SharedPreferences.getInstance();
-    final paths = _takenPhotos.map((f) => f.path).toList();
-    await prefs.setStringList('pending_photos', paths);
-  }
-
-  Future<void> _takePhoto() async {
-    if (_takenPhotos.length >= _maxPhotos) return;
-
-    try {
-      final XFile? photo = await _picker.pickImage(source: ImageSource.camera);
-      if (photo != null) {
-        final directory = await getApplicationDocumentsDirectory();
-        final fileName = path.basename(photo.path);
-        final savedImage = await File(photo.path).copy('${directory.path}/$fileName');
-
-        setState(() {
-          _takenPhotos.add(savedImage);
-        });
-        await _savePendingPhotos();
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('カメラの起動に失敗しました: $e')),
-      );
-    }
-  }
-
-  void _proceedToSelection() {
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (context) => SelectionScreen(photos: _takenPhotos),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('今日の撮影'),
@@ -84,7 +23,7 @@ class _CameraScreenState extends State<CameraScreen> {
         children: [
           const SizedBox(height: 20),
           Text(
-            '${_takenPhotos.length} / $_maxPhotos',
+            '${takenPhotos.length} / $maxPhotos',
             style: const TextStyle(fontSize: 40, fontWeight: FontWeight.w300),
           ),
           const Text(
@@ -100,14 +39,14 @@ class _CameraScreenState extends State<CameraScreen> {
                 crossAxisSpacing: 10,
                 mainAxisSpacing: 10,
               ),
-              itemCount: _takenPhotos.length,
+              itemCount: takenPhotos.length,
               itemBuilder: (context, index) {
                 return Stack(
                   children: [
                     ClipRRect(
                       borderRadius: BorderRadius.circular(12),
                       child: Image.file(
-                        _takenPhotos[index],
+                        takenPhotos[index],
                         fit: BoxFit.cover,
                         width: double.infinity,
                         height: double.infinity,
@@ -124,7 +63,8 @@ class _CameraScreenState extends State<CameraScreen> {
                         ),
                         child: Text(
                           '${index + 1}',
-                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          style:
+                              const TextStyle(color: Colors.white, fontSize: 12),
                         ),
                       ),
                     ),
@@ -137,12 +77,25 @@ class _CameraScreenState extends State<CameraScreen> {
             padding: const EdgeInsets.all(32.0),
             child: Column(
               children: [
-                if (_takenPhotos.length < _maxPhotos)
+                if (takenPhotos.length < maxPhotos)
                   SizedBox(
                     width: double.infinity,
                     height: 56,
                     child: ElevatedButton.icon(
-                      onPressed: _takePhoto,
+                      onPressed: () async {
+                        try {
+                          await ref
+                              .read(pendingPhotosProvider.notifier)
+                              .takePhoto();
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content: Text('カメラの起動に失敗しました: $e')),
+                            );
+                          }
+                        }
+                      },
                       icon: const Icon(Icons.camera_alt),
                       label: const Text('撮影する'),
                       style: ElevatedButton.styleFrom(
@@ -155,13 +108,20 @@ class _CameraScreenState extends State<CameraScreen> {
                       ),
                     ),
                   ),
-                if (_takenPhotos.isNotEmpty) ...[
+                if (takenPhotos.isNotEmpty) ...[
                   const SizedBox(height: 16),
                   SizedBox(
                     width: double.infinity,
                     height: 56,
                     child: OutlinedButton(
-                      onPressed: _proceedToSelection,
+                      onPressed: () {
+                        Navigator.of(context).pushReplacement(
+                          MaterialPageRoute(
+                            builder: (context) =>
+                                SelectionScreen(photos: takenPhotos),
+                          ),
+                        );
+                      },
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.blueGrey),
                         shape: RoundedRectangleBorder(

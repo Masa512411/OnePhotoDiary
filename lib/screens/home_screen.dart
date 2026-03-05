@@ -1,46 +1,26 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import '../providers/photo_provider.dart';
+import '../providers/calendar_provider.dart';
 import 'camera_screen.dart';
 import 'selection_screen.dart';
 
-class HomeScreen extends StatefulWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  CalendarFormat _calendarFormat = CalendarFormat.month;
-  DateTime _focusedDay = DateTime.now();
-  DateTime? _selectedDay;
-  List<File> _pendingPhotos = [];
-
+class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _selectedDay = _focusedDay;
     initializeDateFormatting('ja_JP');
-    _checkPendingPhotos();
-  }
-
-  // 画面に戻ってきたときに再度チェックする
-  Future<void> _checkPendingPhotos() async {
-    final prefs = await SharedPreferences.getInstance();
-    final List<String>? photoPaths = prefs.getStringList('pending_photos');
-    if (photoPaths != null && photoPaths.isNotEmpty) {
-      setState(() {
-        _pendingPhotos = photoPaths.map((p) => File(p)).toList();
-      });
-    } else {
-      setState(() {
-        _pendingPhotos = [];
-      });
-    }
   }
 
   // TODO: 実際のデータをFirestoreから取得するように変更する
@@ -52,36 +32,31 @@ class _HomeScreenState extends State<HomeScreen> {
     return [];
   }
 
-  void _onDaySelected(DateTime selectedDay, DateTime focusedDay) {
-    if (!isSameDay(_selectedDay, selectedDay)) {
-      setState(() {
-        _selectedDay = selectedDay;
-        _focusedDay = focusedDay;
-      });
-    }
-  }
-
   void _openCamera() async {
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => const CameraScreen(),
       ),
     );
-    _checkPendingPhotos();
+    ref.read(pendingPhotosProvider.notifier).reload();
   }
 
-  void _openSelection() async {
+  void _openSelection(List<File> photos) async {
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => SelectionScreen(photos: _pendingPhotos),
+        builder: (context) => SelectionScreen(photos: photos),
       ),
     );
-    _checkPendingPhotos();
+    ref.read(pendingPhotosProvider.notifier).reload();
   }
 
   @override
   Widget build(BuildContext context) {
-    final events = _selectedDay != null ? _getEventsForDay(_selectedDay!) : [];
+    final pendingPhotos = ref.watch(pendingPhotosProvider);
+    final calendarState = ref.watch(calendarProvider);
+    final events = calendarState.selectedDay != null
+        ? _getEventsForDay(calendarState.selectedDay!)
+        : [];
 
     return Scaffold(
       appBar: AppBar(
@@ -93,9 +68,9 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Column(
         children: [
-          if (_pendingPhotos.isNotEmpty)
+          if (pendingPhotos.isNotEmpty)
             GestureDetector(
-              onTap: _openSelection,
+              onTap: () => _openSelection(pendingPhotos),
               child: Container(
                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 padding: const EdgeInsets.all(16),
@@ -123,20 +98,25 @@ class _HomeScreenState extends State<HomeScreen> {
             locale: 'ja_JP',
             firstDay: DateTime.utc(2020, 1, 1),
             lastDay: DateTime.utc(2030, 12, 31),
-            focusedDay: _focusedDay,
-            calendarFormat: _calendarFormat,
-            selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
-            onDaySelected: _onDaySelected,
-            eventLoader: _getEventsForDay, // イベント（記録）がある日を判定
+            focusedDay: calendarState.focusedDay,
+            calendarFormat: calendarState.calendarFormat,
+            selectedDayPredicate: (day) =>
+                isSameDay(calendarState.selectedDay, day),
+            onDaySelected: (selectedDay, focusedDay) {
+              if (!isSameDay(calendarState.selectedDay, selectedDay)) {
+                ref
+                    .read(calendarProvider.notifier)
+                    .selectDay(selectedDay, focusedDay);
+              }
+            },
+            eventLoader: _getEventsForDay,
             onFormatChanged: (format) {
-              if (_calendarFormat != format) {
-                setState(() {
-                  _calendarFormat = format;
-                });
+              if (calendarState.calendarFormat != format) {
+                ref.read(calendarProvider.notifier).changeFormat(format);
               }
             },
             onPageChanged: (focusedDay) {
-              _focusedDay = focusedDay;
+              ref.read(calendarProvider.notifier).changePage(focusedDay);
             },
             headerStyle: const HeaderStyle(
               formatButtonVisible: false,
@@ -156,7 +136,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 shape: BoxShape.circle,
               ),
             ),
-            // カレンダーのマーカーをカスタマイズ（チェックマーク）
             calendarBuilders: CalendarBuilders(
               markerBuilder: (context, date, events) {
                 if (events.isNotEmpty) {
@@ -175,10 +154,9 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           const Divider(height: 1),
-          // 下部エリア：写真とテキスト
           Expanded(
-            child: _selectedDay != null && events.isNotEmpty
-                ? _buildPhotoDetail()
+            child: calendarState.selectedDay != null && events.isNotEmpty
+                ? _buildPhotoDetail(calendarState.selectedDay!)
                 : _buildEmptyState(),
           ),
         ],
@@ -191,15 +169,14 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 記録がある場合の表示
-  Widget _buildPhotoDetail() {
+  Widget _buildPhotoDetail(DateTime selectedDay) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            DateFormat('yyyy年MM月dd日 (E)', 'ja_JP').format(_selectedDay!),
+            DateFormat('yyyy年MM月dd日 (E)', 'ja_JP').format(selectedDay),
             style: const TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
@@ -207,7 +184,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          // 写真エリア（仮）
           Container(
             height: 250,
             width: double.infinity,
@@ -215,13 +191,12 @@ class _HomeScreenState extends State<HomeScreen> {
               color: Colors.grey[200],
               borderRadius: BorderRadius.circular(12),
               image: const DecorationImage(
-                image: NetworkImage('https://picsum.photos/400/300'), // ダミー画像
+                image: NetworkImage('https://picsum.photos/400/300'),
                 fit: BoxFit.cover,
               ),
             ),
           ),
           const SizedBox(height: 16),
-          // テキストエリア
           const Text(
             '今日は近所の公園を散歩しました。木漏れ日がとても綺麗で、思わず立ち止まってしまいました。静かな一日でした。',
             style: TextStyle(
@@ -235,7 +210,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 記録がない場合の表示
   Widget _buildEmptyState() {
     return Center(
       child: Column(

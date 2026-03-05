@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 // import 'package:firebase_core/firebase_core.dart';
-import 'screens/home_screen.dart';
+import 'screens/auth_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -8,7 +9,7 @@ void main() async {
   // await Firebase.initializeApp(
   //   options: DefaultFirebaseOptions.currentPlatform,
   // );
-  runApp(const MyApp());
+  runApp(const ProviderScope(child: MyApp()));
 }
 
 class MyApp extends StatelessWidget {
@@ -22,7 +23,7 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey),
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      home: const AuthScreen(),
     );
   }
 }
