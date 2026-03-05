@@ -51,3 +51,7 @@ app.*.map.json
 # Firebase configuration (contains sensitive API keys)
 google-services.json
 GoogleService-Info.plist
+firebase.json
+
+# Claude Code internal files
+.claude/
