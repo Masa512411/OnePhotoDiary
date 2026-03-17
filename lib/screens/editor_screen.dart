@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/diary_provider.dart';
 import '../providers/photo_provider.dart';
 
 class EditorScreen extends ConsumerStatefulWidget {
@@ -16,8 +17,11 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   final TextEditingController _captionController = TextEditingController();
 
   Future<void> _saveDiary() async {
-    // TODO: Firestoreやローカルに保存する処理
-    
+    await ref.read(diaryProvider.notifier).saveEntry(
+          photo: widget.selectedPhoto,
+          caption: _captionController.text,
+        );
+
     // 保存完了後、未選択の写真をクリアする
     await ref.read(pendingPhotosProvider.notifier).clear();
 
