@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
@@ -41,7 +42,7 @@ class PhotoNotifier extends Notifier<List<File>> {
     await _loadFromStorage();
   }
 
-  /// カメラで写真を撮影して追加する
+  /// カメラで写真を撮影して追加する（EXIFデータを除去して保存）
   Future<bool> takePhoto() async {
     if (state.length >= maxPhotos) return false;
 
@@ -51,8 +52,15 @@ class PhotoNotifier extends Notifier<List<File>> {
       if (photo != null) {
         final directory = await getApplicationDocumentsDirectory();
         final fileName = path.basename(photo.path);
-        final savedImage =
-            await File(photo.path).copy('${directory.path}/$fileName');
+        final destPath = '${directory.path}/$fileName';
+
+        final rawBytes = await File(photo.path).readAsBytes();
+        final decoded = img.decodeImage(rawBytes);
+        if (decoded == null) throw Exception('画像のデコードに失敗しました');
+
+        // EXIFなしでJPEGとして再エンコード
+        final cleanBytes = img.encodeJpg(decoded, quality: 95);
+        final savedImage = await File(destPath).writeAsBytes(cleanBytes);
 
         state = [...state, savedImage];
         await _saveToStorage();
