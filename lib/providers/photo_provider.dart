@@ -1,44 +1,48 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
-import 'package:shared_preferences/shared_preferences.dart';
 
 /// 撮影済み写真（pending_photos）を管理するNotifier
 class PhotoNotifier extends Notifier<List<File>> {
-  static const String _prefsKey = 'pending_photos';
+  static const String _storageKey = 'pending_photos';
   static const int maxPhotos = 3;
+
+  final _storage = const FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
 
   @override
   List<File> build() {
-    // 初期化時にSharedPreferencesから読み込む
-    _loadFromPrefs();
+    _loadFromStorage();
     return [];
   }
 
-  /// SharedPreferencesから写真パスを読み込む
-  Future<void> _loadFromPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    final List<String>? photoPaths = prefs.getStringList(_prefsKey);
-    if (photoPaths != null && photoPaths.isNotEmpty) {
-      state = photoPaths.map((p) => File(p)).toList();
+  /// SecureStorageから写真パスを読み込む
+  Future<void> _loadFromStorage() async {
+    final json = await _storage.read(key: _storageKey);
+    if (json != null) {
+      final paths = List<String>.from(jsonDecode(json));
+      state = paths.map((p) => File(p)).toList();
     }
   }
 
-  /// SharedPreferencesに写真パスを保存する
-  Future<void> _saveToPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
+  /// SecureStorageに写真パスを保存する
+  Future<void> _saveToStorage() async {
     final paths = state.map((f) => f.path).toList();
-    await prefs.setStringList(_prefsKey, paths);
+    await _storage.write(key: _storageKey, value: jsonEncode(paths));
   }
 
-  /// SharedPreferencesから写真パスを再読み込みする（画面復帰時用）
+  /// SecureStorageから写真パスを再読み込みする（画面復帰時用）
   Future<void> reload() async {
-    await _loadFromPrefs();
+    await _loadFromStorage();
   }
 
-  /// カメラで写真を撮影して追加する
+  /// カメラで写真を撮影して追加する（EXIFデータを除去して保存）
   Future<bool> takePhoto() async {
     if (state.length >= maxPhotos) return false;
 
@@ -48,15 +52,21 @@ class PhotoNotifier extends Notifier<List<File>> {
       if (photo != null) {
         final directory = await getApplicationDocumentsDirectory();
         final fileName = path.basename(photo.path);
-        final savedImage =
-            await File(photo.path).copy('${directory.path}/$fileName');
+        final destPath = '${directory.path}/$fileName';
+
+        final rawBytes = await File(photo.path).readAsBytes();
+        final decoded = img.decodeImage(rawBytes);
+        if (decoded == null) throw Exception('画像のデコードに失敗しました');
+
+        // EXIFなしでJPEGとして再エンコード
+        final cleanBytes = img.encodeJpg(decoded, quality: 95);
+        final savedImage = await File(destPath).writeAsBytes(cleanBytes);
 
         state = [...state, savedImage];
-        await _saveToPrefs();
+        await _saveToStorage();
         return true;
       }
     } catch (e) {
-      // 呼び出し元でエラーハンドリング
       rethrow;
     }
     return false;
@@ -64,8 +74,7 @@ class PhotoNotifier extends Notifier<List<File>> {
 
   /// 保存完了後に写真をクリアする
   Future<void> clear() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_prefsKey);
+    await _storage.delete(key: _storageKey);
     state = [];
   }
 }

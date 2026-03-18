@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class DiaryEntry {
   final File photo;
@@ -41,6 +41,9 @@ class DiaryState {
 
 class DiaryNotifier extends Notifier<DiaryState> {
   static const _datesKey = 'diary_dates';
+  static const _storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
 
   @override
   DiaryState build() {
@@ -49,20 +52,18 @@ class DiaryNotifier extends Notifier<DiaryState> {
   }
 
   Future<void> _loadDates() async {
-    final prefs = await SharedPreferences.getInstance();
-    final json = prefs.getString(_datesKey);
+    final json = await _storage.read(key: _datesKey);
     if (json == null) return;
     final dates = Set<String>.from(jsonDecode(json) as List);
     state = state.copyWith(datesWithEntries: dates);
   }
 
   Future<void> saveEntry({required File photo, required String caption}) async {
-    final prefs = await SharedPreferences.getInstance();
     final today = DateTime.now().toIso8601String().substring(0, 10);
     final entry = DiaryEntry(photo: photo, caption: caption, date: today);
-    await prefs.setString('diary_$today', jsonEncode(entry.toJson()));
+    await _storage.write(key: 'diary_$today', value: jsonEncode(entry.toJson()));
     final newDates = {...state.datesWithEntries, today};
-    await prefs.setString(_datesKey, jsonEncode(newDates.toList()));
+    await _storage.write(key: _datesKey, value: jsonEncode(newDates.toList()));
     state = state.copyWith(datesWithEntries: newDates);
   }
 }
@@ -71,13 +72,15 @@ final diaryProvider = NotifierProvider<DiaryNotifier, DiaryState>(
   () => DiaryNotifier(),
 );
 
-/// 指定日の日記エントリをSharedPreferencesから取得するProvider
+/// 指定日の日記エントリをFlutterSecureStorageから取得するProvider
 final diaryEntryProvider =
     FutureProvider.autoDispose.family<DiaryEntry?, String>((ref, dateKey) async {
   // diaryProviderの状態変化（保存後）に追従する
   ref.watch(diaryProvider);
-  final prefs = await SharedPreferences.getInstance();
-  final json = prefs.getString('diary_$dateKey');
+  const storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+  final json = await storage.read(key: 'diary_$dateKey');
   if (json == null) return null;
   return DiaryEntry.fromJson(jsonDecode(json) as Map<String, dynamic>);
 });
