@@ -1,0 +1,86 @@
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+class DiaryEntry {
+  final File photo;
+  final String caption;
+  final String date;
+
+  const DiaryEntry({
+    required this.photo,
+    required this.caption,
+    required this.date,
+  });
+
+  factory DiaryEntry.fromJson(Map<String, dynamic> json) => DiaryEntry(
+        photo: File(json['photo'] as String),
+        caption: json['caption'] as String,
+        date: json['date'] as String,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'photo': photo.path,
+        'caption': caption,
+        'date': date,
+      };
+}
+
+class DiaryState {
+  final Set<String> datesWithEntries;
+
+  const DiaryState({this.datesWithEntries = const {}});
+
+  DiaryState copyWith({Set<String>? datesWithEntries}) =>
+      DiaryState(datesWithEntries: datesWithEntries ?? this.datesWithEntries);
+
+  bool hasEntry(DateTime day) =>
+      datesWithEntries.contains(day.toIso8601String().substring(0, 10));
+}
+
+class DiaryNotifier extends Notifier<DiaryState> {
+  static const _datesKey = 'diary_dates';
+  static const _storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+
+  @override
+  DiaryState build() {
+    _loadDates();
+    return const DiaryState();
+  }
+
+  Future<void> _loadDates() async {
+    final json = await _storage.read(key: _datesKey);
+    if (json == null) return;
+    final dates = Set<String>.from(jsonDecode(json) as List);
+    state = state.copyWith(datesWithEntries: dates);
+  }
+
+  Future<void> saveEntry({required File photo, required String caption}) async {
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    final entry = DiaryEntry(photo: photo, caption: caption, date: today);
+    await _storage.write(key: 'diary_$today', value: jsonEncode(entry.toJson()));
+    final newDates = {...state.datesWithEntries, today};
+    await _storage.write(key: _datesKey, value: jsonEncode(newDates.toList()));
+    state = state.copyWith(datesWithEntries: newDates);
+  }
+}
+
+final diaryProvider = NotifierProvider<DiaryNotifier, DiaryState>(
+  () => DiaryNotifier(),
+);
+
+/// 指定日の日記エントリをFlutterSecureStorageから取得するProvider
+final diaryEntryProvider =
+    FutureProvider.autoDispose.family<DiaryEntry?, String>((ref, dateKey) async {
+  // diaryProviderの状態変化（保存後）に追従する
+  ref.watch(diaryProvider);
+  const storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+  final json = await storage.read(key: 'diary_$dateKey');
+  if (json == null) return null;
+  return DiaryEntry.fromJson(jsonDecode(json) as Map<String, dynamic>);
+});

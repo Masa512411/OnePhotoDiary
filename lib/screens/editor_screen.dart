@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../providers/diary_provider.dart';
 import '../providers/photo_provider.dart';
 
 class EditorScreen extends ConsumerStatefulWidget {
@@ -18,16 +18,10 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   final TextEditingController _captionController = TextEditingController();
 
   Future<void> _saveDiary() async {
-    const storage = FlutterSecureStorage(
-      aOptions: AndroidOptions(encryptedSharedPreferences: true),
-    );
-    final today = DateTime.now().toIso8601String().substring(0, 10);
-    final entry = jsonEncode({
-      'photo': widget.selectedPhoto.path,
-      'caption': _captionController.text,
-      'date': today,
-    });
-    await storage.write(key: 'diary_$today', value: entry);
+    await ref.read(diaryProvider.notifier).saveEntry(
+          photo: widget.selectedPhoto,
+          caption: _captionController.text,
+        );
 
     // 保存完了後、未選択の写真をクリアする
     await ref.read(pendingPhotosProvider.notifier).clear();

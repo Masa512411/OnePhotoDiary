@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import '../providers/diary_provider.dart';
 import '../providers/photo_provider.dart';
 import '../providers/calendar_provider.dart';
 import 'camera_screen.dart';
@@ -23,13 +24,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     initializeDateFormatting('ja_JP');
   }
 
-  // TODO: 実際のデータをFirestoreから取得するように変更する
-  List<String> _getEventsForDay(DateTime day) {
-    // 仮実装: 偶数日には「記録あり」としてイベントを返す
-    if (day.day % 2 == 0) {
-      return ['photo'];
-    }
-    return [];
+  List<String> _getEventsForDay(DateTime day, DiaryState diaryState) {
+    return diaryState.hasEntry(day) ? ['photo'] : [];
   }
 
   void _openCamera() async {
@@ -54,8 +50,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Widget build(BuildContext context) {
     final pendingPhotos = ref.watch(pendingPhotosProvider);
     final calendarState = ref.watch(calendarProvider);
+    final diaryState = ref.watch(diaryProvider);
     final events = calendarState.selectedDay != null
-        ? _getEventsForDay(calendarState.selectedDay!)
+        ? _getEventsForDay(calendarState.selectedDay!, diaryState)
         : [];
 
     return Scaffold(
@@ -109,7 +106,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     .selectDay(selectedDay, focusedDay);
               }
             },
-            eventLoader: _getEventsForDay,
+            eventLoader: (day) => _getEventsForDay(day, diaryState),
             onFormatChanged: (format) {
               if (calendarState.calendarFormat != format) {
                 ref.read(calendarProvider.notifier).changeFormat(format);
@@ -170,43 +167,49 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Widget _buildPhotoDetail(DateTime selectedDay) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            DateFormat('yyyy年MM月dd日 (E)', 'ja_JP').format(selectedDay),
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.black54,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Container(
-            height: 250,
-            width: double.infinity,
-            decoration: BoxDecoration(
-              color: Colors.grey[200],
-              borderRadius: BorderRadius.circular(12),
-              image: const DecorationImage(
-                image: NetworkImage('https://picsum.photos/400/300'),
-                fit: BoxFit.cover,
+    final dateKey = selectedDay.toIso8601String().substring(0, 10);
+    final entryAsync = ref.watch(diaryEntryProvider(dateKey));
+    return entryAsync.when(
+      data: (entry) {
+        if (entry == null) return _buildEmptyState();
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                DateFormat('yyyy年MM月dd日 (E)', 'ja_JP').format(selectedDay),
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black54,
+                ),
               ),
-            ),
+              const SizedBox(height: 16),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.file(
+                  entry.photo,
+                  width: double.infinity,
+                  height: 250,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                entry.caption,
+                style: const TextStyle(
+                  fontSize: 16,
+                  height: 1.6,
+                  color: Colors.black87,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 16),
-          const Text(
-            '今日は近所の公園を散歩しました。木漏れ日がとても綺麗で、思わず立ち止まってしまいました。静かな一日でした。',
-            style: TextStyle(
-              fontSize: 16,
-              height: 1.6,
-              color: Colors.black87,
-            ),
-          ),
-        ],
-      ),
+        );
+      },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, st) => _buildEmptyState(),
     );
   }
 
