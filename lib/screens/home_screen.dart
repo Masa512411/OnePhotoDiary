@@ -9,6 +9,7 @@ import '../providers/photo_provider.dart';
 import '../providers/calendar_provider.dart';
 import 'camera_screen.dart';
 import 'selection_screen.dart';
+import 'settings_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -60,8 +61,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         title: const Text('One Photo Diary'),
         centerTitle: true,
         backgroundColor: Colors.transparent,
-        foregroundColor: Colors.black87,
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const SettingsScreen(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: Column(
         children: [

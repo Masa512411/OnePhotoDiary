@@ -66,6 +66,22 @@ class DiaryNotifier extends Notifier<DiaryState> {
     await _storage.write(key: _datesKey, value: jsonEncode(newDates.toList()));
     state = state.copyWith(datesWithEntries: newDates);
   }
+
+  Future<void> deleteAllData() async {
+    for (final dateKey in state.datesWithEntries) {
+      final entryJson = await _storage.read(key: 'diary_$dateKey');
+      if (entryJson != null) {
+        final entry =
+            DiaryEntry.fromJson(jsonDecode(entryJson) as Map<String, dynamic>);
+        if (await entry.photo.exists()) {
+          await entry.photo.delete();
+        }
+        await _storage.delete(key: 'diary_$dateKey');
+      }
+    }
+    await _storage.delete(key: _datesKey);
+    state = const DiaryState();
+  }
 }
 
 final diaryProvider = NotifierProvider<DiaryNotifier, DiaryState>(
