@@ -37,6 +37,36 @@ class DiaryState {
 
   bool hasEntry(DateTime day) =>
       datesWithEntries.contains(day.toIso8601String().substring(0, 10));
+
+  /// 今日を起点に連続記録日数を計算する
+  /// 今日のエントリーがない場合は昨日を起点にする
+  int get currentStreak {
+    if (datesWithEntries.isEmpty) return 0;
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final todayKey = today.toIso8601String().substring(0, 10);
+
+    // 今日のエントリーがあれば今日から、なければ昨日から遡る
+    DateTime checkDate = datesWithEntries.contains(todayKey)
+        ? today
+        : today.subtract(const Duration(days: 1));
+
+    int streak = 0;
+    while (true) {
+      final key = checkDate.toIso8601String().substring(0, 10);
+      if (!datesWithEntries.contains(key)) break;
+      streak++;
+      checkDate = checkDate.subtract(const Duration(days: 1));
+    }
+    return streak;
+  }
+
+  /// 今日のエントリーが存在するか
+  bool get hasEntryToday {
+    final todayKey = DateTime.now().toIso8601String().substring(0, 10);
+    return datesWithEntries.contains(todayKey);
+  }
 }
 
 class DiaryNotifier extends Notifier<DiaryState> {
