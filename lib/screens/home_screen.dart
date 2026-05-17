@@ -8,6 +8,7 @@ import '../providers/diary_provider.dart';
 import '../providers/photo_provider.dart';
 import '../providers/calendar_provider.dart';
 import 'camera_screen.dart';
+import 'gallery_screen.dart';
 import 'selection_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -62,9 +63,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.black87,
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.photo_library_outlined),
+            tooltip: 'ギャラリー',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (context) => const GalleryScreen()),
+            ),
+          ),
+        ],
       ),
       body: Column(
         children: [
+          _buildStreakBanner(diaryState),
           if (pendingPhotos.isNotEmpty)
             GestureDetector(
               onTap: () => _openSelection(pendingPhotos),
@@ -210,6 +221,55 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       },
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, st) => _buildEmptyState(),
+    );
+  }
+
+  Widget _buildStreakBanner(DiaryState diaryState) {
+    final streak = diaryState.currentStreak;
+    final hasToday = diaryState.hasEntryToday;
+
+    if (streak == 0) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: streak >= 7
+              ? [Colors.orange.shade400, Colors.deepOrange.shade400]
+              : [Colors.blueGrey.shade300, Colors.blueGrey.shade500],
+        ),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Text(
+            streak >= 7 ? '🔥' : '✨',
+            style: const TextStyle(fontSize: 24),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$streak日連続記録中！',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+                if (!hasToday)
+                  const Text(
+                    '今日も記録して継続しよう',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
