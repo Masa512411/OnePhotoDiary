@@ -48,6 +48,9 @@ dependencies:
   local_auth: ^2.3.0
   flutter_riverpod: ^2.6.1
   image: ^4.3.0
+  flutter_local_notifications: ^17.2.4
+  timezone: ^0.9.4
+  flutter_timezone: ^3.0.1
 
 dev_dependencies:
   flutter_test:
