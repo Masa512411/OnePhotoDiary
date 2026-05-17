@@ -8,6 +8,7 @@ import '../providers/diary_provider.dart';
 import '../providers/photo_provider.dart';
 import '../providers/calendar_provider.dart';
 import 'camera_screen.dart';
+import 'gallery_screen.dart';
 import 'selection_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -62,6 +63,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.black87,
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.photo_library_outlined),
+            tooltip: 'ギャラリー',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (context) => const GalleryScreen()),
+            ),
+          ),
+        ],
       ),
       body: Column(
         children: [

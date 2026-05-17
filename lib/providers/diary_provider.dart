@@ -114,3 +114,20 @@ final diaryEntryProvider =
   if (json == null) return null;
   return DiaryEntry.fromJson(jsonDecode(json) as Map<String, dynamic>);
 });
+
+/// 全エントリを日付降順で返すProvider
+final allDiaryEntriesProvider = FutureProvider<List<DiaryEntry>>((ref) async {
+  final diaryState = ref.watch(diaryProvider);
+  const storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+  final sortedDates = diaryState.datesWithEntries.toList()
+    ..sort((a, b) => b.compareTo(a));
+  final entries = <DiaryEntry>[];
+  for (final date in sortedDates) {
+    final json = await storage.read(key: 'diary_$date');
+    if (json == null) continue;
+    entries.add(DiaryEntry.fromJson(jsonDecode(json) as Map<String, dynamic>));
+  }
+  return entries;
+});
