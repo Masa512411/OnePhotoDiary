@@ -53,20 +53,18 @@ class AuthNotifier extends Notifier<AuthState> {
 
   /// 端末認証（生体認証 or パスコード）を実行する
   Future<void> authenticate() async {
-    // 認証ダイアログの多重表示を防ぐ
+    // 認証ダイアログの多重表示を防ぐ（awaitより前に状態を変える）
     if (state.status == AuthStatus.authenticating) return;
+    state = state.copyWith(
+      status: AuthStatus.authenticating,
+      errorMessage: null,
+    );
 
     // 端末に画面ロックがなければ保護対象なしとして通す
     if (!await _isDeviceSupported()) {
       state = state.copyWith(status: AuthStatus.unsupported);
       return;
     }
-
-    // 認証中に設定
-    state = state.copyWith(
-      status: AuthStatus.authenticating,
-      errorMessage: null,
-    );
 
     // 生体認証が使えない場合はパスコードにフォールバック
     try {
@@ -113,11 +111,12 @@ class AuthNotifier extends Notifier<AuthState> {
   }
 
   /// 端末で認証（生体認証 or パスコード）が利用可能か
+  /// 判定できない場合はロックを外さないよう「利用可能」とみなす
   Future<bool> _isDeviceSupported() async {
     try {
       return await _localAuth.isDeviceSupported();
     } on PlatformException {
-      return false;
+      return true;
     }
   }
 

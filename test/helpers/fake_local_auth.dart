@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 
@@ -7,6 +9,13 @@ class FakeLocalAuthentication implements LocalAuthentication {
   List<bool> deviceSupported;
   bool authResult;
   PlatformException? authError;
+
+  /// isDeviceSupportedで投げる例外
+  PlatformException? deviceSupportedError;
+
+  /// 設定すると、完了するまでauthenticateの結果を返さない
+  Completer<bool>? pendingAuth;
+
   int authenticateCalls = 0;
   AuthenticationOptions? lastOptions;
 
@@ -18,6 +27,7 @@ class FakeLocalAuthentication implements LocalAuthentication {
 
   @override
   Future<bool> isDeviceSupported() async {
+    if (deviceSupportedError != null) throw deviceSupportedError!;
     final value = deviceSupported.first;
     if (deviceSupported.length > 1) {
       deviceSupported = deviceSupported.sublist(1);
@@ -33,6 +43,7 @@ class FakeLocalAuthentication implements LocalAuthentication {
   }) async {
     authenticateCalls++;
     lastOptions = options;
+    if (pendingAuth != null) return pendingAuth!.future;
     if (authError != null) throw authError!;
     return authResult;
   }

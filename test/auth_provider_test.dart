@@ -122,6 +122,48 @@ void main() {
     });
   });
 
+  group('AuthNotifier.authenticate（多重実行・例外）', () {
+    test('awaitせずに2回呼んでも認証は1回だけ', () async {
+      fake = FakeLocalAuthentication();
+      container = createContainer();
+      final notifier = container.read(authProvider.notifier);
+
+      await Future.wait([notifier.authenticate(), notifier.authenticate()]);
+
+      expect(fake.authenticateCalls, 1);
+      expect(container.read(authProvider).status, AuthStatus.authenticated);
+    });
+
+    test('isDeviceSupportedが例外でも通さずに認証へ進む', () async {
+      fake = FakeLocalAuthentication()
+        ..deviceSupportedError = PlatformException(code: 'error');
+      container = createContainer();
+
+      final state = await authenticate();
+
+      expect(fake.authenticateCalls, 1);
+      expect(state.status, AuthStatus.authenticated);
+    });
+
+    test('isDeviceSupportedが例外で認証も失敗ならfailed', () async {
+      fake = FakeLocalAuthentication(
+        authError: PlatformException(code: 'UserCancelled'),
+      )..deviceSupportedError = PlatformException(code: 'error');
+      container = createContainer();
+
+      expect((await authenticate()).status, AuthStatus.failed);
+    });
+
+    test('NotAvailable後の再確認が例外ならfailed', () async {
+      fake = FakeLocalAuthentication(
+        authError: PlatformException(code: auth_error.notAvailable),
+      )..deviceSupportedError = PlatformException(code: 'error');
+      container = createContainer();
+
+      expect((await authenticate()).status, AuthStatus.failed);
+    });
+  });
+
   group('AuthNotifier.lock', () {
     test('解除済みならinitialに戻る', () async {
       fake = FakeLocalAuthentication();
@@ -163,6 +205,17 @@ void main() {
       await container.read(authProvider.notifier).recheckDeviceLock();
 
       expect(container.read(authProvider).status, AuthStatus.unsupported);
+    });
+
+    test('再確認が例外ならロックする', () async {
+      fake = FakeLocalAuthentication(deviceSupported: [false]);
+      container = createContainer();
+      await authenticate();
+      fake.deviceSupportedError = PlatformException(code: 'error');
+
+      await container.read(authProvider.notifier).recheckDeviceLock();
+
+      expect(container.read(authProvider).status, AuthStatus.initial);
     });
 
     test('認証済みなら何もしない', () async {
