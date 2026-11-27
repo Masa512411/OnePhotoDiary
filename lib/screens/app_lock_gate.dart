@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/auth_provider.dart';
@@ -43,7 +44,7 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
   void initState() {
     super.initState();
     _lifecycleListener = AppLifecycleListener(
-      onInactive: _coverContent,
+      onInactive: _onInactive,
       onHide: _onBackground,
       onPause: _onBackground,
       onResume: _onResume,
@@ -75,6 +76,13 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
     setState(() => _privacyCovered = true);
   }
 
+  void _onInactive() {
+    // iOSはアプリ切り替え画面のスナップショットがinactiveの間に撮られるので、ここで覆う
+    // Androidは通知シェードや権限ダイアログ、分割画面でもinactiveになるため覆わない
+    // （最近のアプリ一覧はAPI 33以上ならMainActivityで非表示にしている）
+    if (defaultTargetPlatform == TargetPlatform.iOS) _coverContent();
+  }
+
   void _onBackground() {
     _coverContent();
     // ロック中・認証ダイアログ表示中の離脱は再ロックの対象外
@@ -83,12 +91,18 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
     }
   }
 
-  void _onResume() {
+  Future<void> _onResume() async {
     final notifier = ref.read(authProvider.notifier);
     final shouldLock = ref.read(relockTimerProvider).shouldLockOnResume();
     if (ref.read(authProvider).status == AuthStatus.unsupported) {
       // 画面ロックなしの端末はロック画面を出さず、画面ロックが設定されたかだけ確認
-      notifier.recheckDeviceLock();
+      // 離脱中に画面ロックが設定されていたら、ロック画面に切り替わるまで覆ったままにする
+      await notifier.recheckDeviceLock();
+      if (!mounted) return;
+      // 確認中に再び前面から外れていたら覆ったままにする
+      if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+        return;
+      }
     } else if (shouldLock) {
       notifier.lock();
     }

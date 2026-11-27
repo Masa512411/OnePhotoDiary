@@ -13,6 +13,9 @@ class FakeLocalAuthentication implements LocalAuthentication {
   /// isDeviceSupportedで投げる例外
   PlatformException? deviceSupportedError;
 
+  /// 設定すると、完了するまでisDeviceSupportedの結果を返さない
+  Completer<bool>? pendingDeviceSupported;
+
   /// 設定すると、完了するまでauthenticateの結果を返さない
   Completer<bool>? pendingAuth;
 
@@ -27,6 +30,7 @@ class FakeLocalAuthentication implements LocalAuthentication {
 
   @override
   Future<bool> isDeviceSupported() async {
+    if (pendingDeviceSupported != null) return pendingDeviceSupported!.future;
     if (deviceSupportedError != null) throw deviceSupportedError!;
     final value = deviceSupported.first;
     if (deviceSupported.length > 1) {

@@ -346,10 +346,68 @@ void main() {
       await unlockByRetry(tester);
       expect(find.text('ロック中の画面'), findsOneWidget);
     });
+
+    testWidgets('ロック中にコードで画面が閉じたら、新しい最前面の画面で止め直す', (tester) async {
+      fake = FakeLocalAuthentication();
+      await pumpApp(tester);
+      await tester.tap(find.text('ホーム'));
+      await tester.pumpAndSettle();
+      navigatorKey.currentState!.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('一時的な画面')),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await lockNow(tester);
+
+      navigatorKey.currentState!.pop();
+      await tester.pumpAndSettle();
+
+      expect(await tester.binding.handlePopRoute(), isTrue);
+      await tester.pumpAndSettle();
+      await predictiveBack(tester);
+
+      await unlockByRetry(tester);
+      expect(find.text('一時的な画面'), findsNothing);
+      expect(find.text('詳細画面'), findsOneWidget);
+    });
+
+    testWidgets('ロック中は最前面のダイアログも戻る操作で閉じない', (tester) async {
+      fake = FakeLocalAuthentication();
+      await pumpApp(tester);
+      showDialog<void>(
+        context: navigatorKey.currentContext!,
+        builder: (_) => const AlertDialog(content: Text('確認ダイアログ')),
+      );
+      await tester.pumpAndSettle();
+      await lockNow(tester);
+
+      expect(await tester.binding.handlePopRoute(), isTrue);
+      await tester.pumpAndSettle();
+
+      await unlockByRetry(tester);
+      expect(find.text('確認ダイアログ'), findsOneWidget);
+
+      // 解除後は戻る操作で閉じられる
+      expect(await tester.binding.handlePopRoute(), isTrue);
+      await tester.pumpAndSettle();
+      expect(find.text('確認ダイアログ'), findsNothing);
+    });
   });
 
   group('プライバシーカバー', () {
-    testWidgets('前面から外れると内容を覆い、60秒未満で戻ると入力途中のまま外す', (tester) async {
+    /// 裏から戻り始めた（resumed前の）最初のフレームで内容が覆われていることを確認する
+    Future<void> returnToForeground(WidgetTester tester) async {
+      tester.binding
+        ..handleAppLifecycleStateChanged(AppLifecycleState.hidden)
+        ..handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pump();
+      expect(privacyCover, findsOneWidget);
+      expect(find.text('ホーム').hitTestable(), findsNothing);
+      expect(find.text('詳細画面').hitTestable(), findsNothing);
+    }
+
+    testWidgets('裏に回ると内容を覆い、60秒未満で戻ると入力途中のまま外す', (tester) async {
       // カメラで撮影して戻るケース
       fake = FakeLocalAuthentication();
       await pumpApp(tester);
@@ -360,17 +418,20 @@ void main() {
         find.byType(EditableText),
       );
 
-      // inactiveの時点で覆う（hidden以降はフレームが描画されない）
+      // Androidはinactiveでは覆わない
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       await tester.pump();
-      expect(privacyCover, findsOneWidget);
-      expect(find.text('詳細画面').hitTestable(), findsNothing);
+      expect(privacyCover, findsNothing);
 
+      // hidden以降はフレームが描画されないため、復帰時の最初のフレームで覆われている
       tester.binding
         ..handleAppLifecycleStateChanged(AppLifecycleState.hidden)
         ..handleAppLifecycleStateChanged(AppLifecycleState.paused);
       now = now.add(const Duration(seconds: 30));
-      await resume(tester);
+      await returnToForeground(tester);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
 
       expect(privacyCover, findsNothing);
       expect(lockScreen, findsNothing);
@@ -383,20 +444,37 @@ void main() {
       );
     });
 
-    testWidgets('inactiveから直接戻ったときもカバーを外す', (tester) async {
-      // コントロールセンターや通知シェードなど
+    testWidgets('Androidではinactiveだけでは覆わない', (tester) async {
+      // 通知シェード・権限ダイアログ・分割画面で別アプリを操作中など
+      fake = FakeLocalAuthentication();
+      await pumpApp(tester);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pump();
+      expect(privacyCover, findsNothing);
+      expect(find.text('ホーム').hitTestable(), findsOneWidget);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(privacyCover, findsNothing);
+    });
+
+    testWidgets('iOSではinactiveで覆い、そのまま戻ったら外す', (tester) async {
+      // アプリ切り替え画面のスナップショット前に覆う
       fake = FakeLocalAuthentication();
       await pumpApp(tester);
 
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       await tester.pump();
       expect(privacyCover, findsOneWidget);
+      expect(find.text('ホーム').hitTestable(), findsNothing);
 
+      // コントロールセンターなど
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
       expect(privacyCover, findsNothing);
       expect(find.text('ホーム').hitTestable(), findsOneWidget);
-    });
+    }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
     testWidgets('60秒以上離脱するとカバーからロック画面に切り替わる', (tester) async {
       fake = FakeLocalAuthentication();
@@ -419,42 +497,105 @@ void main() {
       await pumpApp(tester);
       expect(container.read(authProvider).status, AuthStatus.unsupported);
 
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      await tester.pump();
-      expect(privacyCover, findsOneWidget);
-
       goBackground(tester);
       now = now.add(const Duration(seconds: 61));
-      await resume(tester);
+      await returnToForeground(tester);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
 
       expect(privacyCover, findsNothing);
       expect(lockScreen, findsNothing);
       expect(find.text('ホーム').hitTestable(), findsOneWidget);
     });
 
-    testWidgets('認証ダイアログ表示中は覆わず、解除後にも残らない', (tester) async {
-      fake = FakeLocalAuthentication();
-      await pumpApp(tester);
-      await tester.tap(find.text('ホーム'));
-      await tester.pumpAndSettle();
-      await lockNow(tester);
+    group('画面ロックなしの端末で画面ロック設定の確認中', () {
+      Future<void> resumeWhileChecking(WidgetTester tester) async {
+        fake = FakeLocalAuthentication(deviceSupported: [false]);
+        await pumpApp(tester);
+        goBackground(tester);
 
-      // 認証ダイアログでアプリがinactiveになっている間に認証が成功する
-      fake.pendingAuth = Completer<bool>();
-      await tester.tap(lockScreen);
-      await tester.pump();
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      await tester.pump();
-      expect(privacyCover, findsNothing);
+        fake
+          ..pendingDeviceSupported = Completer<bool>()
+          ..authResult = false;
+        for (final s in [
+          AppLifecycleState.hidden,
+          AppLifecycleState.inactive,
+          AppLifecycleState.resumed,
+        ]) {
+          tester.binding.handleAppLifecycleStateChanged(s);
+        }
+        await tester.pump();
 
-      fake.pendingAuth!.complete(true);
-      await tester.pump();
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-      await tester.pumpAndSettle();
+        // 確認が終わるまで内容を出さない
+        expect(privacyCover, findsOneWidget);
+        expect(lockScreen, findsNothing);
+        expect(find.text('ホーム').hitTestable(), findsNothing);
+      }
 
-      expect(privacyCover, findsNothing);
-      expect(lockScreen, findsNothing);
-      expect(find.text('詳細画面').hitTestable(), findsOneWidget);
+      testWidgets('画面ロックが設定されていたら内容を見せずにロック画面へ切り替わる', (tester) async {
+        await resumeWhileChecking(tester);
+
+        fake.pendingDeviceSupported!.complete(true);
+        await tester.pumpAndSettle();
+
+        expect(lockScreen, findsOneWidget);
+        expect(privacyCover, findsNothing);
+      });
+
+      testWidgets('画面ロックが未設定のままならカバーを外す', (tester) async {
+        await resumeWhileChecking(tester);
+
+        fake.pendingDeviceSupported!.complete(false);
+        await tester.pumpAndSettle();
+
+        expect(privacyCover, findsNothing);
+        expect(lockScreen, findsNothing);
+        expect(find.text('ホーム').hitTestable(), findsOneWidget);
+      });
+
+      testWidgets('確認中に再び裏に回ったら覆ったままにする', (tester) async {
+        await resumeWhileChecking(tester);
+
+        goBackground(tester);
+        fake.pendingDeviceSupported!.complete(false);
+        await tester.pump();
+
+        // 次に戻り始めた最初のフレームでも覆われている
+        await returnToForeground(tester);
+      });
     });
+
+    testWidgets(
+      '認証ダイアログ表示中は覆わず、解除後にも残らない',
+      (tester) async {
+        fake = FakeLocalAuthentication();
+        await pumpApp(tester);
+        await tester.tap(find.text('ホーム'));
+        await tester.pumpAndSettle();
+        await lockNow(tester);
+
+        // 認証ダイアログ（Androidのパスコード画面など）でアプリが裏に回っている間に
+        // 認証が成功する
+        fake.pendingAuth = Completer<bool>();
+        await tester.tap(lockScreen);
+        await tester.pump();
+        goBackground(tester);
+        await tester.pump();
+        expect(privacyCover, findsNothing);
+
+        fake.pendingAuth!.complete(true);
+        await tester.pump();
+        await resume(tester);
+
+        expect(privacyCover, findsNothing);
+        expect(lockScreen, findsNothing);
+        expect(find.text('詳細画面').hitTestable(), findsOneWidget);
+      },
+      variant: const TargetPlatformVariant({
+        TargetPlatform.android,
+        TargetPlatform.iOS,
+      }),
+    );
   });
 }
