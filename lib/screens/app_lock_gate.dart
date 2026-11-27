@@ -11,6 +11,9 @@ class AppLockGate extends ConsumerStatefulWidget {
 
   const AppLockGate({super.key, required this.child});
 
+  /// アプリが前面から外れている間に内容を隠すカバー（テスト用にキーを公開）
+  static const privacyCoverKey = ValueKey('privacyCover');
+
   @override
   ConsumerState<AppLockGate> createState() => _AppLockGateState();
 }
@@ -21,23 +24,52 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
   // 一度もロック解除していない間はアプリ本体を生成しない
   bool _hasUnlocked = false;
 
+  // アプリ切り替え画面や復帰直後に内容が見えないよう覆っているか
+  bool _privacyCovered = false;
+
+  // ロック中に下の画面が戻る操作で閉じないよう、最前面の画面に登録する
+  // ロック画面はNavigatorの外にあるためPopScopeでは止められない
+  final _lockPopEntry = _LockPopEntry();
+  ModalRoute<Object?>? _guardedRoute;
+
   @override
   void initState() {
     super.initState();
     _lifecycleListener = AppLifecycleListener(
+      onInactive: _coverContent,
       onHide: _onBackground,
       onPause: _onBackground,
       onResume: _onResume,
     );
+    ref.listenManual(authProvider.select((s) => s.isUnlocked), (_, _) {
+      // ロック画面を描画した後の画面スタックに対して付け外しする
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (ref.read(authProvider).isUnlocked) {
+          _releaseBack();
+        } else {
+          _guardBack();
+        }
+      });
+    });
   }
 
   @override
   void dispose() {
     _lifecycleListener.dispose();
+    _releaseBack();
+    _lockPopEntry.dispose();
     super.dispose();
   }
 
+  void _coverContent() {
+    // ロック中（認証ダイアログ表示中を含む）はロック画面が出ているので覆わない
+    if (_privacyCovered || !ref.read(authProvider).isUnlocked) return;
+    setState(() => _privacyCovered = true);
+  }
+
   void _onBackground() {
+    _coverContent();
     // ロック中・認証ダイアログ表示中の離脱は再ロックの対象外
     if (ref.read(authProvider).isUnlocked) {
       ref.read(relockTimerProvider).markBackground();
@@ -53,6 +85,70 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
     } else if (shouldLock) {
       notifier.lock();
     }
+    // ロックする場合も同じフレームでロック画面に切り替わるので、内容は見えない
+    if (_privacyCovered) setState(() => _privacyCovered = false);
+  }
+
+  /// ロック中は画面スタックの最前面の画面を戻る操作で閉じられないようにする
+  /// （システムの戻るボタン・予測型「戻る」ジェスチャーのどちらも止まる）
+  void _guardBack() {
+    final navigator = _findNavigator();
+    if (navigator == null) return;
+    Route<dynamic>? top;
+    // 条件が最前面で成立するので何も閉じずに最前面の画面だけ取得できる
+    navigator.popUntil((route) {
+      top = route;
+      return true;
+    });
+    final route = top;
+    if (route is! ModalRoute<Object?> || identical(route, _guardedRoute)) {
+      return;
+    }
+    // 付け外しで発生する通知から再度呼ばれるので、先に登録先を更新しておく
+    final previous = _guardedRoute;
+    _guardedRoute = route;
+    _unregisterFrom(previous);
+    route.registerPopEntry(_lockPopEntry);
+  }
+
+  void _releaseBack() {
+    final route = _guardedRoute;
+    _guardedRoute = null;
+    _unregisterFrom(route);
+  }
+
+  void _unregisterFrom(ModalRoute<Object?>? route) {
+    // 既に閉じた画面には何もしない
+    if (route != null && route.isActive) {
+      route.unregisterPopEntry(_lockPopEntry);
+    }
+  }
+
+  /// ゲート配下のアプリ本体のNavigatorを探す
+  NavigatorState? _findNavigator() {
+    NavigatorState? result;
+    void visit(Element element) {
+      if (result != null) return;
+      if (element is StatefulElement && element.state is NavigatorState) {
+        result = element.state as NavigatorState;
+        return;
+      }
+      element.visitChildren(visit);
+    }
+
+    context.visitChildElements(visit);
+    return result;
+  }
+
+  bool _onNavigationNotification(NavigationNotification notification) {
+    if (ref.read(authProvider).isUnlocked) return false;
+    // ロック中に画面スタックが変わったら、新しい最前面の画面で止め直す
+    _guardBack();
+    if (notification.canHandlePop) return false;
+    // ロック中は戻る操作を常にFlutter側で受け取って止める
+    // （OSに任せるとアプリが閉じて操作途中の画面が失われることがある）
+    const NavigationNotification(canHandlePop: true).dispatch(context);
+    return true;
   }
 
   @override
@@ -71,12 +167,33 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
             excluding: !isUnlocked,
             child: IgnorePointer(
               ignoring: !isUnlocked,
-              child: widget.child,
+              child: NotificationListener<NavigationNotification>(
+                onNotification: _onNavigationNotification,
+                child: widget.child,
+              ),
             ),
           ),
         ),
         if (!isUnlocked) const AuthScreen(),
+        // 入力中のフォーカスを外さないよう、下の画面には手を加えず上から覆う
+        if (_privacyCovered)
+          const Positioned.fill(
+            child: ColoredBox(
+              key: AppLockGate.privacyCoverKey,
+              color: Colors.white,
+            ),
+          ),
       ],
     );
   }
+}
+
+/// 戻る操作で画面を閉じさせないPopEntry
+class _LockPopEntry extends PopEntry<Object?> {
+  final ValueNotifier<bool> _canPop = ValueNotifier(false);
+
+  @override
+  ValueNotifier<bool> get canPopNotifier => _canPop;
+
+  void dispose() => _canPop.dispose();
 }
