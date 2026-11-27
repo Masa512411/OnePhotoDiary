@@ -19,6 +19,11 @@ class ReminderState {
   );
 }
 
+/// NotificationServiceのProvider（テストで差し替え可能にする）
+final notificationServiceProvider = Provider<NotificationService>(
+  (ref) => NotificationService.instance,
+);
+
 class ReminderNotifier extends Notifier<ReminderState> {
   static const _enabledKey = 'reminder_enabled';
   static const _hourKey = 'reminder_hour';
@@ -28,8 +33,24 @@ class ReminderNotifier extends Notifier<ReminderState> {
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
   );
 
+  NotificationService get _notifications =>
+      ref.read(notificationServiceProvider);
+
+  /// 通知の予約・取り消しを直列に実行するためのキュー
+  Future<void> _queue = Future.value();
+
+  /// 実行待ちの再スケジュール（連続した要求を1回にまとめる）
+  Future<void>? _pendingReschedule;
+
   @override
   ReminderState build() {
+    // 予約は14日分だけなので、バックグラウンドから戻るたびに予約を延長する
+    final lifecycleListener = AppLifecycleListener(onResume: reschedule);
+    ref.onDispose(lifecycleListener.dispose);
+    // エントリ保存・削除時（起動直後の読み込み完了を含む）に再スケジュールして、記録済みの日をスキップ
+    ref.listen<DiaryState>(diaryProvider, (prev, next) {
+      if (prev?.datesWithEntries != next.datesWithEntries) reschedule();
+    });
     _load();
     return ReminderState.defaultState;
   }
@@ -55,7 +76,7 @@ class ReminderNotifier extends Notifier<ReminderState> {
 
   Future<void> setEnabled(bool enabled) async {
     if (enabled) {
-      final granted = await NotificationService.instance.requestPermissions();
+      final granted = await _notifications.requestPermissions();
       if (!granted) return;
     }
     await _storage.write(key: _enabledKey, value: enabled.toString());
@@ -63,7 +84,7 @@ class ReminderNotifier extends Notifier<ReminderState> {
     if (enabled) {
       await reschedule();
     } else {
-      await NotificationService.instance.cancelAll();
+      await _enqueue(() => _notifications.cancelAll());
     }
   }
 
@@ -77,13 +98,26 @@ class ReminderNotifier extends Notifier<ReminderState> {
   }
 
   /// 現在の設定とエントリ済み日付を反映して通知を再スケジュールする
-  Future<void> reschedule() async {
-    if (!state.enabled) return;
-    final diaryState = ref.read(diaryProvider);
-    await NotificationService.instance.scheduleDailyReminder(
-      time: state.time,
-      skipDates: diaryState.datesWithEntries,
-    );
+  ///
+  /// 取り消し→予約の途中で別の再スケジュールが割り込むと古い予約が残るため直列化する。
+  /// 設定と記録済み日付は実行時点の最新値を読む。
+  Future<void> reschedule() {
+    return _pendingReschedule ??= _enqueue(() async {
+      _pendingReschedule = null;
+      if (!state.enabled) return;
+      final diaryState = ref.read(diaryProvider);
+      await _notifications.scheduleDailyReminder(
+        time: state.time,
+        skipDates: diaryState.datesWithEntries,
+      );
+    });
+  }
+
+  Future<void> _enqueue(Future<void> Function() task) {
+    final result = _queue.then((_) => task());
+    // 失敗しても後続の予約を止めない
+    _queue = result.catchError((Object _) {});
+    return result;
   }
 }
 

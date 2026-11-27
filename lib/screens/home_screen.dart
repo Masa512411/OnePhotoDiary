@@ -7,7 +7,6 @@ import 'package:intl/date_symbol_data_local.dart';
 import '../providers/diary_provider.dart';
 import '../providers/photo_provider.dart';
 import '../providers/calendar_provider.dart';
-import '../providers/reminder_provider.dart';
 import 'camera_screen.dart';
 import 'gallery_screen.dart';
 import 'selection_screen.dart';
@@ -55,12 +54,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final calendarState = ref.watch(calendarProvider);
     final diaryState = ref.watch(diaryProvider);
 
-    // エントリ保存・削除時にリマインダーを再スケジュールして、当日分の通知をスキップ
-    ref.listen<DiaryState>(diaryProvider, (prev, next) {
-      if (prev?.datesWithEntries != next.datesWithEntries) {
-        ref.read(reminderProvider.notifier).reschedule();
-      }
-    });
     final events = calendarState.selectedDay != null
         ? _getEventsForDay(calendarState.selectedDay!, diaryState)
         : [];
