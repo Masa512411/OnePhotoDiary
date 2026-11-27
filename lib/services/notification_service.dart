@@ -5,18 +5,33 @@ import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
 /// ローカル通知の初期化・スケジュールを担うサービス
+///
+/// 「記録済みの日はスキップする」ため、毎日繰り返す通知
+/// （matchDateTimeComponents: DateTimeComponents.time）は使わず、
+/// 日付ごとの単発通知を [scheduleDays] 日分まとめて予約する。
+/// 繰り返し通知は個別の日だけ止められず、iOS では開始日も無視されて
+/// 次の該当時刻から鳴るため、当日の記録済みスキップができない。
+/// 予約が切れないよう、起動時・復帰時・記録時に再スケジュールする。
 class NotificationService {
-  NotificationService._();
-  static final NotificationService instance = NotificationService._();
+  /// [plugin]・[clock] はテストで差し替えるための引数
+  @visibleForTesting
+  NotificationService({
+    FlutterLocalNotificationsPlugin? plugin,
+    tz.TZDateTime Function()? clock,
+  }) : _plugin = plugin ?? FlutterLocalNotificationsPlugin(),
+       _clock = clock ?? (() => tz.TZDateTime.now(tz.local));
+
+  static final NotificationService instance = NotificationService();
 
   static const _channelId = 'daily_reminder';
   static const _channelName = '毎日のリマインダー';
   static const _channelDescription = '今日の一枚を記録するリマインドです';
 
-  /// 事前スケジュールする日数（アプリ起動時に必ず再スケジュールされる前提）
+  /// 事前スケジュールする日数（起動時・復帰時に再スケジュールされる前提）
   static const int scheduleDays = 14;
 
-  final _plugin = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _plugin;
+  final tz.TZDateTime Function() _clock;
   bool _initialized = false;
 
   Future<void> init() async {
@@ -78,16 +93,17 @@ class NotificationService {
       iOS: DarwinNotificationDetails(),
     );
 
-    final now = tz.TZDateTime.now(tz.local);
+    final now = _clock();
     for (var offset = 0; offset < scheduleDays; offset++) {
+      // Duration で足すと夏時間の切り替わりで時刻がずれるため日付で組み立てる
       final target = tz.TZDateTime(
-        tz.local,
+        now.location,
         now.year,
         now.month,
-        now.day,
+        now.day + offset,
         time.hour,
         time.minute,
-      ).add(Duration(days: offset));
+      );
 
       if (target.isBefore(now)) continue;
 
