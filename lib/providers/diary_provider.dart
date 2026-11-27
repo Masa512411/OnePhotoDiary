@@ -141,7 +141,15 @@ class DiaryNotifier extends Notifier<DiaryState> {
     final dates =
         json == null ? <String>{} : Set<String>.from(jsonDecode(json) as List);
     if (dates.isNotEmpty) return dates;
-    final keys = (await _storage.readAll()).keys;
+    // 復元は補助的な処理のため、失敗しても空として扱う
+    // （一覧が無い・空なら今日だけを書いても過去の日付は減らないので保存を止めない）
+    final Iterable<String> keys;
+    try {
+      keys = (await _storage.readAll()).keys;
+    } catch (e) {
+      debugPrint('日記の日付一覧の復元に失敗しました: $e');
+      return {};
+    }
     return keys
         .map(_entryKeyPattern.firstMatch)
         .whereType<RegExpMatch>()

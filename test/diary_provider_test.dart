@@ -374,5 +374,21 @@ void main() {
       await pumpEventQueue();
       expect(container.read(diaryProvider).datesWithEntries, {'2026-01-01'});
     });
+
+    test('復元に失敗しても日付一覧が無ければ保存できる', () async {
+      final documents = setUpFakeDocumentsDirectory();
+      useFakeStorage({});
+      fakeStorage.failReadAll = true;
+
+      container.read(diaryProvider);
+      await pumpEventQueue();
+      await container.read(diaryProvider.notifier).saveEntry(
+            photo: createPhoto(documents, 'a.jpg'),
+            caption: '',
+          );
+
+      expect(await storedDates(), {today});
+      expect(container.read(diaryProvider).datesWithEntries, {today});
+    });
   });
 }

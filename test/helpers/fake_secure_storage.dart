@@ -9,6 +9,9 @@ class FakeSecureStorage extends FlutterSecureStorage {
   /// キーごとに、読み込みで例外を投げる残り回数（-1なら常に投げる）
   final Map<String, int> readFailures = {};
 
+  /// trueならreadAllで例外を投げる
+  bool failReadAll = false;
+
   /// 書き込んだキーの記録
   final List<String> writtenKeys = [];
 
@@ -31,6 +34,19 @@ class FakeSecureStorage extends FlutterSecureStorage {
       throw Exception('読み込み失敗: $key');
     }
     return super.read(key: key);
+  }
+
+  @override
+  Future<Map<String, String>> readAll({
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    if (failReadAll) throw Exception('全件読み込み失敗');
+    return super.readAll();
   }
 
   @override
