@@ -17,7 +17,6 @@ class AppLockGate extends ConsumerStatefulWidget {
 
 class _AppLockGateState extends ConsumerState<AppLockGate> {
   late final AppLifecycleListener _lifecycleListener;
-  final RelockTimer _relockTimer = RelockTimer();
 
   // 一度もロック解除していない間はアプリ本体を生成しない
   bool _hasUnlocked = false;
@@ -41,13 +40,17 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
   void _onBackground() {
     // ロック中・認証ダイアログ表示中の離脱は再ロックの対象外
     if (ref.read(authProvider).isUnlocked) {
-      _relockTimer.markBackground();
+      ref.read(relockTimerProvider).markBackground();
     }
   }
 
   void _onResume() {
-    if (_relockTimer.shouldLockOnResume()) {
-      ref.read(authProvider.notifier).lock();
+    final notifier = ref.read(authProvider.notifier);
+    if (ref.read(relockTimerProvider).shouldLockOnResume()) {
+      notifier.lock();
+    } else {
+      // 離脱中に画面ロックが設定された場合は猶予時間に関係なくロック
+      notifier.recheckDeviceLock();
     }
   }
 

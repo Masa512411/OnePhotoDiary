@@ -144,6 +144,38 @@ void main() {
     });
   });
 
+  group('AuthNotifier.recheckDeviceLock', () {
+    test('画面ロックなしで通過中に画面ロックが設定されたらロックする', () async {
+      fake = FakeLocalAuthentication(deviceSupported: [false, true]);
+      container = createContainer();
+      await authenticate();
+
+      await container.read(authProvider.notifier).recheckDeviceLock();
+
+      expect(container.read(authProvider).status, AuthStatus.initial);
+    });
+
+    test('画面ロックが未設定のままなら通過したまま', () async {
+      fake = FakeLocalAuthentication(deviceSupported: [false]);
+      container = createContainer();
+      await authenticate();
+
+      await container.read(authProvider.notifier).recheckDeviceLock();
+
+      expect(container.read(authProvider).status, AuthStatus.unsupported);
+    });
+
+    test('認証済みなら何もしない', () async {
+      fake = FakeLocalAuthentication();
+      container = createContainer();
+      await authenticate();
+
+      await container.read(authProvider.notifier).recheckDeviceLock();
+
+      expect(container.read(authProvider).status, AuthStatus.authenticated);
+    });
+  });
+
   group('RelockTimer', () {
     late DateTime now;
     late RelockTimer timer;

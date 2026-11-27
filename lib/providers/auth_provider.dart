@@ -100,6 +100,12 @@ class AuthNotifier extends Notifier<AuthState> {
     }
   }
 
+  /// 画面ロックなしで通過中に端末へ画面ロックが設定されたらロックする
+  Future<void> recheckDeviceLock() async {
+    if (state.status != AuthStatus.unsupported) return;
+    if (await _isDeviceSupported()) lock();
+  }
+
   /// ロック状態に戻す（バックグラウンド復帰時の再ロック用）
   void lock() {
     if (!state.isUnlocked) return;
@@ -158,3 +164,6 @@ class RelockTimer {
     return _now().difference(backgroundedAt) >= _lockAfter;
   }
 }
+
+/// 再ロック判定のProvider（テストで時刻を差し替え可能にする）
+final relockTimerProvider = Provider<RelockTimer>((ref) => RelockTimer());
