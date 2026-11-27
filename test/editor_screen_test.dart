@@ -160,6 +160,31 @@ void main() {
     expect(find.byType(EditorScreen), findsNothing);
   });
 
+  testWidgets('同一フレーム内の連続タップでも保存を2回呼ばない', (tester) async {
+    await pumpEditor(tester);
+    diary.saveGate = Completer<void>();
+
+    // 再描画（ボタン無効化）前に2回タップする
+    await tester.tap(saveButton());
+    await tester.tap(saveButton());
+    await tester.pump();
+    expect(diary.saveCount, 1);
+
+    diary.saveGate!.complete();
+    await tester.pumpAndSettle();
+    expect(diary.saveCount, 1);
+  });
+
+  testWidgets('同一フレーム内の連続タップでも確認ダイアログは1つだけ', (tester) async {
+    await pumpEditor(tester, hasTodayEntry: true);
+
+    await tester.tap(saveButton());
+    await tester.tap(saveButton());
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AlertDialog), findsOneWidget);
+  });
+
   testWidgets('保存に失敗したらボタンを再度有効にする', (tester) async {
     await pumpEditor(tester);
     diary.failSave = true;
