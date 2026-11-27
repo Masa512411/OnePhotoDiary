@@ -11,9 +11,9 @@ Directory setUpFakeDocumentsDirectory() {
   final dir = Directory.systemTemp.createTempSync('one_photo_diary_test_');
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
       .setMockMethodCallHandler(_pathProviderChannel, (call) async {
-    if (call.method == 'getApplicationDocumentsDirectory') return dir.path;
-    return null;
-  });
+        if (call.method == 'getApplicationDocumentsDirectory') return dir.path;
+        return null;
+      });
   addTearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(_pathProviderChannel, null);

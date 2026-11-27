@@ -6,6 +6,7 @@ import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 import '../services/photo_storage.dart';
+import 'diary_provider.dart';
 
 /// 撮影済み写真（pending_photos）を管理するNotifier
 class PhotoNotifier extends Notifier<List<File>> {
@@ -22,21 +23,69 @@ class PhotoNotifier extends Notifier<List<File>> {
     return [];
   }
 
+  /// 写真ファイル名 → 撮影日（yyyy-MM-dd）
+  final Map<String, String> _captureDates = {};
+
+  static String _todayKey() =>
+      DateTime.now().toIso8601String().substring(0, 10);
+
   /// SecureStorageから写真を読み込む
-  /// 保存値はファイル名（旧データは絶対パス）なので、現在のDocumentsディレクトリで解決する
+  /// 保存値はファイル名（旧データは絶対パス）なので、現在のDocumentsディレクトリで解決する。
+  /// 前日以前に撮影された写真は今日の候補ではないため、一覧から外してファイルも削除する。
   Future<void> _loadFromStorage() async {
     final json = await _storage.read(key: _storageKey);
-    if (json != null) {
-      final documents = await PhotoStorage.documentsDirectory();
-      final names = List<String>.from(jsonDecode(json));
-      state = names.map((n) => PhotoStorage.resolve(n, documents)).toList();
+    if (json == null) return;
+    final documents = await PhotoStorage.documentsDirectory();
+    final today = _todayKey();
+
+    final kept = <String, String>{};
+    final stale = <File>[];
+    var changed = false;
+    for (final item in jsonDecode(json) as List) {
+      final String name;
+      String? date;
+      if (item is Map) {
+        name = PhotoStorage.toStoredName(item['name'] as String);
+        date = item['date'] as String?;
+      } else {
+        // 旧形式（絶対パスのみ・撮影日なし）はファイルの更新日時を撮影日とみなす
+        name = PhotoStorage.toStoredName(item as String);
+        changed = true;
+      }
+      final file = PhotoStorage.resolve(name, documents);
+      if (!await file.exists()) {
+        changed = true;
+        continue;
+      }
+      date ??= (await file.lastModified()).toIso8601String().substring(0, 10);
+      if (date == today) {
+        kept[name] = date;
+      } else {
+        stale.add(file);
+        changed = true;
+      }
     }
+
+    if (stale.isNotEmpty) {
+      // 保存済みエントリが参照している写真は絶対に削除しない
+      // （保存直後にpendingのクリア前でアプリが終了した場合など）
+      await _deleteUnreferenced(stale);
+    }
+
+    _captureDates
+      ..clear()
+      ..addAll(kept);
+    state = kept.keys.map((n) => PhotoStorage.resolve(n, documents)).toList();
+    if (changed) await _saveToStorage();
   }
 
-  /// SecureStorageに写真のファイル名を保存する
+  /// SecureStorageに写真のファイル名と撮影日を保存する
   Future<void> _saveToStorage() async {
-    final names = state.map((f) => PhotoStorage.toStoredName(f.path)).toList();
-    await _storage.write(key: _storageKey, value: jsonEncode(names));
+    final items = state.map((f) {
+      final name = PhotoStorage.toStoredName(f.path);
+      return {'name': name, 'date': _captureDates[name] ?? _todayKey()};
+    }).toList();
+    await _storage.write(key: _storageKey, value: jsonEncode(items));
   }
 
   /// SecureStorageから写真パスを再読み込みする（画面復帰時用）
@@ -65,6 +114,7 @@ class PhotoNotifier extends Notifier<List<File>> {
         final cleanBytes = img.encodeJpg(decoded, quality: 95);
         final savedImage = await File(destPath).writeAsBytes(cleanBytes);
 
+        _captureDates[fileName] = _todayKey();
         state = [...state, savedImage];
         await _saveToStorage();
         return true;
@@ -76,9 +126,39 @@ class PhotoNotifier extends Notifier<List<File>> {
   }
 
   /// 保存完了後に写真をクリアする
+  /// 選ばれなかった写真のファイルも削除する。日記エントリの保存後に呼ばれるため、
+  /// 選ばれた写真は保存済みエントリから参照されており削除対象にならない。
   Future<void> clear() async {
+    final photos = [...state];
+    final documents = await PhotoStorage.documentsDirectory();
+    final json = await _storage.read(key: _storageKey);
+    if (json != null) {
+      for (final item in jsonDecode(json) as List) {
+        final name = item is Map ? item['name'] as String : item as String;
+        photos.add(PhotoStorage.resolve(name, documents));
+      }
+    }
+
     await _storage.delete(key: _storageKey);
+    _captureDates.clear();
     state = [];
+
+    await _deleteUnreferenced(photos);
+  }
+
+  /// 保存済みエントリから参照されていない写真ファイルだけを削除する
+  /// 参照の確認に失敗した場合は、誤削除を避けるため何も削除しない
+  Future<void> _deleteUnreferenced(List<File> files) async {
+    final Set<String> referenced;
+    try {
+      referenced = await loadReferencedPhotoNames();
+    } catch (_) {
+      return;
+    }
+    for (final file in files) {
+      if (referenced.contains(PhotoStorage.toStoredName(file.path))) continue;
+      await PhotoStorage.deleteQuietly(file);
+    }
   }
 }
 

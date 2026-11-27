@@ -32,7 +32,8 @@ void main() {
       FlutterSecureStorage.setMockInitialValues({
         'diary_dates': jsonEncode(['2026-11-27']),
         'diary_2026-11-27': jsonEncode({
-          'photo': '/var/mobile/Containers/Data/Application/OLD-UUID/Documents/old.jpg',
+          'photo':
+              '/var/mobile/Containers/Data/Application/OLD-UUID/Documents/old.jpg',
           'caption': '昔のエントリ',
           'date': '2026-11-27',
         }),
@@ -41,8 +42,9 @@ void main() {
       // autoDisposeのため、読み込み中に破棄されないようlistenしておく
       final sub = container.listen(diaryEntryProvider('2026-11-27'), (_, _) {});
       addTearDown(sub.close);
-      final entry =
-          await container.read(diaryEntryProvider('2026-11-27').future);
+      final entry = await container.read(
+        diaryEntryProvider('2026-11-27').future,
+      );
 
       expect(entry!.photo.path, '${documents.path}/old.jpg');
       expect(entry.photo.existsSync(), isTrue);
@@ -52,10 +54,16 @@ void main() {
       final documents = setUpFakeDocumentsDirectory();
       FlutterSecureStorage.setMockInitialValues({
         'diary_dates': jsonEncode(['2026-11-26', '2026-11-27']),
-        'diary_2026-11-26': jsonEncode(
-            {'photo': '/old/path/a.jpg', 'caption': '', 'date': '2026-11-26'}),
-        'diary_2026-11-27': jsonEncode(
-            {'photo': 'b.jpg', 'caption': '', 'date': '2026-11-27'}),
+        'diary_2026-11-26': jsonEncode({
+          'photo': '/old/path/a.jpg',
+          'caption': '',
+          'date': '2026-11-26',
+        }),
+        'diary_2026-11-27': jsonEncode({
+          'photo': 'b.jpg',
+          'caption': '',
+          'date': '2026-11-27',
+        }),
       });
       // diaryProviderの読み込み完了を待つ
       container.read(diaryProvider);
@@ -73,10 +81,16 @@ void main() {
       setUpFakeDocumentsDirectory();
       FlutterSecureStorage.setMockInitialValues({
         'diary_dates': jsonEncode(['2026-11-26', '2026-11-27']),
-        'diary_2026-11-26': jsonEncode(
-            {'photo': '/old/path/a.jpg', 'caption': '', 'date': '2026-11-26'}),
-        'diary_2026-11-27': jsonEncode(
-            {'photo': 'b.jpg', 'caption': '', 'date': '2026-11-27'}),
+        'diary_2026-11-26': jsonEncode({
+          'photo': '/old/path/a.jpg',
+          'caption': '',
+          'date': '2026-11-26',
+        }),
+        'diary_2026-11-27': jsonEncode({
+          'photo': 'b.jpg',
+          'caption': '',
+          'date': '2026-11-27',
+        }),
       });
 
       expect(await loadReferencedPhotoNames(), {'a.jpg', 'b.jpg'});
