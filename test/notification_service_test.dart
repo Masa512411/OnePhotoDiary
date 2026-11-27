@@ -25,8 +25,13 @@ void main() {
   });
 
   // clock は now を参照するので、テスト中に時刻を進められる
-  NotificationService createService() =>
-      NotificationService(plugin: plugin, clock: () => now);
+  // 既定は予約一覧が実際の予約と一致する iOS の挙動
+  NotificationService createService({bool trustPendingList = true}) =>
+      NotificationService(
+        plugin: plugin,
+        clock: () => now,
+        trustPendingList: trustPendingList,
+      );
 
   int id(int y, int m, int d) =>
       NotificationService.idForDate(DateTime(y, m, d));
@@ -207,6 +212,102 @@ void main() {
         expect(target.hour, 21, reason: '$target');
         expect(target.minute, 0, reason: '$target');
       }
+    });
+  });
+
+  group('Android（予約一覧がキャッシュ）', () {
+    test('強制停止で予約が消えても、再スケジュールで登録し直す', () async {
+      final service = createService(trustPendingList: false);
+      await service.scheduleDailyReminder(time: nine, skipDates: {});
+      // キャッシュには残っているが、OS の予約は消えている
+      plugin.forceStop();
+      expect(plugin.scheduled, hasLength(days));
+
+      await service.scheduleDailyReminder(time: nine, skipDates: {});
+
+      expect(plugin.alarms, hasLength(days));
+      expect(plugin.cancelledIds, isEmpty);
+    });
+
+    test('iOSでは同じ予約を入れ直さない（比較用）', () async {
+      final service = createService();
+      await service.scheduleDailyReminder(time: nine, skipDates: {});
+      plugin.forceStop();
+
+      await service.scheduleDailyReminder(time: nine, skipDates: {});
+
+      expect(plugin.alarms, isEmpty);
+    });
+
+    test('毎回登録し直しても表示中の今日のリマインダーは消さない', () async {
+      final service = createService(trustPendingList: false);
+      await service.scheduleDailyReminder(time: nine, skipDates: {});
+      plugin.deliver(id(2026, 11, 28));
+      now = tz.TZDateTime(tokyo, 2026, 11, 28, 21, 30);
+      plugin.scheduledIds.clear();
+
+      await service.scheduleDailyReminder(time: nine, skipDates: {});
+
+      expect(plugin.displayed, contains(id(2026, 11, 28)));
+      expect(plugin.cancelledIds, isEmpty);
+      expect(plugin.scheduledIds, isNot(contains(id(2026, 11, 28))));
+      expect(plugin.alarms, hasLength(days - 1));
+    });
+
+    test('記録済みの日は登録し直さず取り消す', () async {
+      final service = createService(trustPendingList: false);
+      await service.scheduleDailyReminder(time: nine, skipDates: {});
+      plugin.scheduledIds.clear();
+
+      await service.scheduleDailyReminder(
+        time: nine,
+        skipDates: {'2026-11-30'},
+      );
+
+      expect(plugin.cancelledIds, [id(2026, 11, 30)]);
+      expect(plugin.scheduledIds, isNot(contains(id(2026, 11, 30))));
+    });
+  });
+
+  group('NotificationService.refreshTimeZone', () {
+    late tz.Location original;
+    setUp(() => original = tz.local);
+    tearDown(() => tz.setLocalLocation(original));
+
+    test('端末のタイムゾーンが変わっていれば読み直す', () async {
+      tz.setLocalLocation(tokyo);
+      final service = NotificationService(
+        plugin: plugin,
+        localTimezone: () async => 'America/New_York',
+      );
+
+      await service.refreshTimeZone();
+
+      expect(tz.local.name, 'America/New_York');
+    });
+
+    test('取得に失敗しても例外を投げず、設定を変えない', () async {
+      tz.setLocalLocation(tokyo);
+      final service = NotificationService(
+        plugin: plugin,
+        localTimezone: () async => throw Exception('unavailable'),
+      );
+
+      await service.refreshTimeZone();
+
+      expect(tz.local.name, 'Asia/Tokyo');
+    });
+
+    test('未知のタイムゾーン名なら設定を変えない', () async {
+      tz.setLocalLocation(tokyo);
+      final service = NotificationService(
+        plugin: plugin,
+        localTimezone: () async => 'Invalid/Zone',
+      );
+
+      await service.refreshTimeZone();
+
+      expect(tz.local.name, 'Asia/Tokyo');
     });
   });
 }

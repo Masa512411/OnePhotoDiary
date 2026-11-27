@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
@@ -16,13 +17,18 @@ import 'package:timezone/timezone.dart' as tz;
 /// 再スケジュールは全取り消しせず差分で反映する（cancelAll は表示中の通知まで消すため）。
 /// 通知 ID は日付ごとに固定（YYYYMMDD）し、同じ ID の再予約は上書きになる。
 class NotificationService {
-  /// [plugin]・[clock] はテストで差し替えるための引数
+  /// [plugin]・[clock]・[localTimezone]・[trustPendingList] はテストで差し替えるための引数
   @visibleForTesting
   NotificationService({
     FlutterLocalNotificationsPlugin? plugin,
     tz.TZDateTime Function()? clock,
+    Future<String> Function()? localTimezone,
+    bool? trustPendingList,
   }) : _plugin = plugin ?? FlutterLocalNotificationsPlugin(),
-       _clock = clock ?? (() => tz.TZDateTime.now(tz.local));
+       _clock = clock ?? (() => tz.TZDateTime.now(tz.local)),
+       _localTimezone = localTimezone ?? FlutterTimezone.getLocalTimezone,
+       _trustPendingList =
+           trustPendingList ?? defaultTargetPlatform != TargetPlatform.android;
 
   static final NotificationService instance = NotificationService();
 
@@ -40,13 +46,19 @@ class NotificationService {
 
   final FlutterLocalNotificationsPlugin _plugin;
   final tz.TZDateTime Function() _clock;
+  final Future<String> Function() _localTimezone;
+
+  /// 予約一覧（pendingNotificationRequests）が実際の予約と一致するか。
+  /// iOS は OS の予約一覧そのものだが、Android はプラグインが SharedPreferences に
+  /// 保存したキャッシュで、強制停止やバックアップ復元で AlarmManager の予約が消えても残る
+  final bool _trustPendingList;
   bool _initialized = false;
 
   Future<void> init() async {
     if (_initialized) return;
 
     tz_data.initializeTimeZones();
-    final localName = await FlutterTimezone.getLocalTimezone();
+    final localName = await _localTimezone();
     tz.setLocalLocation(tz.getLocation(localName));
 
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -60,6 +72,18 @@ class NotificationService {
     );
 
     _initialized = true;
+  }
+
+  /// 端末のタイムゾーンを読み直す（バックグラウンド中に変更された場合に備える）
+  /// 取得できない・未知のタイムゾーンの場合は現在の設定のまま使う
+  Future<void> refreshTimeZone() async {
+    try {
+      final localName = await _localTimezone();
+      if (localName == tz.local.name) return;
+      tz.setLocalLocation(tz.getLocation(localName));
+    } catch (e) {
+      debugPrint('タイムゾーンの再取得に失敗しました: $e');
+    }
   }
 
   /// 通知許可をリクエスト（iOS は明示的、Android 13+ は POST_NOTIFICATIONS）
@@ -103,7 +127,9 @@ class NotificationService {
   ///
   /// 予約済みの通知との差分だけを反映する。
   /// - 不要になった予約（記録済み・期間外・時刻変更で過ぎた日）だけを取り消す
-  /// - 未予約または時刻が変わった日だけを予約する（同じIDで上書き）
+  /// - 未予約または時刻が変わった日だけを予約する（同じIDで上書き）。
+  ///   Android は予約一覧が当てにならないため、予約すべき日を毎回すべて予約し直す
+  ///   （予約すべき日は未来の時刻だけなので、表示中の通知には影響しない）
   /// - 表示済みの通知は予約一覧に無いため触らない。ただし今日を記録したら今日の分は消す
   Future<void> scheduleDailyReminder({
     required TimeOfDay time,
@@ -170,7 +196,7 @@ class NotificationService {
     }
 
     for (final MapEntry(key: id, value: target) in wanted.entries) {
-      if (pending[id] == payload) continue;
+      if (_trustPendingList && pending[id] == payload) continue;
       await _plugin.zonedSchedule(
         id,
         '今日の一枚を記録しましょう',
