@@ -92,6 +92,33 @@ void main() {
       expect(fake.scheduleCalls.length, before + 1);
     });
 
+    test('復帰時はタイムゾーンを読み直してから再スケジュールする', () async {
+      setStorage();
+      await createContainer();
+      fake.calls.clear();
+
+      simulateResume();
+      await pumpEventQueue();
+
+      expect(fake.calls, ['refreshTimeZone', 'schedule']);
+    });
+
+    test('復帰時・記録時の予約失敗は捕捉される', () async {
+      setStorage();
+      final c = await createContainer();
+      fake.scheduleError = StateError('platform');
+
+      // 捕捉されない例外があるとテストが失敗する
+      simulateResume();
+      await pumpEventQueue();
+      await c
+          .read(diaryProvider.notifier)
+          .saveEntry(photo: File('photo.jpg'), caption: '');
+      await pumpEventQueue();
+
+      expect(fake.calls.where((c) => c == 'schedule').length, greaterThan(1));
+    });
+
     test('破棄後は復帰しても再スケジュールしない', () async {
       setStorage();
       final c = await createContainer();

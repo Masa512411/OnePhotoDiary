@@ -45,11 +45,13 @@ class ReminderNotifier extends Notifier<ReminderState> {
   @override
   ReminderState build() {
     // 予約は scheduleDays 日分だけなので、バックグラウンドから戻るたびに予約を延長する
-    final lifecycleListener = AppLifecycleListener(onResume: reschedule);
+    final lifecycleListener = AppLifecycleListener(onResume: _onResume);
     ref.onDispose(lifecycleListener.dispose);
     // エントリ保存・削除時（起動直後の読み込み完了を含む）に再スケジュールして、記録済みの日をスキップ
     ref.listen<DiaryState>(diaryProvider, (prev, next) {
-      if (prev?.datesWithEntries != next.datesWithEntries) reschedule();
+      if (prev?.datesWithEntries != next.datesWithEntries) {
+        _rescheduleQuietly();
+      }
     });
     _load();
     return ReminderState.defaultState;
@@ -70,7 +72,23 @@ class ReminderNotifier extends Notifier<ReminderState> {
     );
 
     if (enabled) {
+      await _rescheduleQuietly();
+    }
+  }
+
+  /// 復帰時はタイムゾーンを読み直してから再スケジュールする
+  Future<void> _onResume() async {
+    if (!state.enabled) return;
+    await _notifications.refreshTimeZone();
+    await _rescheduleQuietly();
+  }
+
+  /// 呼び出し元が待たない再スケジュール用。失敗はログに残して握りつぶす
+  Future<void> _rescheduleQuietly() async {
+    try {
       await reschedule();
+    } catch (e) {
+      debugPrint('リマインダーの再スケジュールに失敗しました: $e');
     }
   }
 
