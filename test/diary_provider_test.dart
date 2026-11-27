@@ -390,5 +390,54 @@ void main() {
       expect(await storedDates(), {today});
       expect(container.read(diaryProvider).datesWithEntries, {today});
     });
+
+    test('一覧が1日分しかなくても残っているエントリのキーから全て復元する', () async {
+      final documents = setUpFakeDocumentsDirectory();
+      useFakeStorage({
+        // このバグで一覧が保存した日だけに上書きされた状態
+        'diary_dates': jsonEncode(['2026-01-03']),
+        ...entryOf('2026-01-01', 'a.jpg'),
+        ...entryOf('2026-01-02', 'b.jpg'),
+        ...entryOf('2026-01-03', 'c.jpg'),
+        'pending_photos': jsonEncode([]),
+        'reminder_enabled': 'true',
+      });
+
+      container.read(diaryProvider);
+      await pumpEventQueue();
+      expect(
+        container.read(diaryProvider).datesWithEntries,
+        {'2026-01-01', '2026-01-02', '2026-01-03'},
+      );
+
+      // 保存時に修復した一覧が書き込まれる
+      await container.read(diaryProvider.notifier).saveEntry(
+            photo: createPhoto(documents, 'd.jpg'),
+            caption: '',
+          );
+      expect(
+        await storedDates(),
+        {'2026-01-01', '2026-01-02', '2026-01-03', today},
+      );
+    });
+
+    test('復元に失敗しても保存済みの一覧は読み込み・保存に使われる', () async {
+      final documents = setUpFakeDocumentsDirectory();
+      useFakeStorage({
+        'diary_dates': jsonEncode(['2026-01-01']),
+        ...entryOf('2026-01-01', 'a.jpg'),
+      });
+      fakeStorage.failReadAll = true;
+
+      container.read(diaryProvider);
+      await pumpEventQueue();
+      expect(container.read(diaryProvider).datesWithEntries, {'2026-01-01'});
+
+      await container.read(diaryProvider.notifier).saveEntry(
+            photo: createPhoto(documents, 'b.jpg'),
+            caption: '',
+          );
+      expect(await storedDates(), {'2026-01-01', today});
+    });
   });
 }

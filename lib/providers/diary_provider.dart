@@ -134,27 +134,29 @@ class DiaryNotifier extends Notifier<DiaryState> {
   }
 
   /// ストレージから日付一覧を読む
-  /// 一覧が無い・空の場合は、残っているdiary_YYYY-MM-DDのキーから復元する
-  /// （一覧だけが失われたデータでも過去の日記を表示できるようにするため）
+  /// 一覧に加えて、残っているdiary_YYYY-MM-DDのキーの日付も合わせて返す
+  /// （一覧の一部・全部が失われたデータでも過去の日記を表示できるようにするため）
+  /// 一覧自体を読めない場合は例外を投げる
   Future<Set<String>> _readStoredDates() async {
     final json = await _storage.read(key: _datesKey);
     final dates =
         json == null ? <String>{} : Set<String>.from(jsonDecode(json) as List);
-    if (dates.isNotEmpty) return dates;
-    // 復元は補助的な処理のため、失敗しても空として扱う
-    // （一覧が無い・空なら今日だけを書いても過去の日付は減らないので保存を止めない）
+    // 復元は補助的な処理のため、失敗しても一覧だけを返す
+    // （一覧を元にしているので、保存しても過去の日付は減らない）
     final Iterable<String> keys;
     try {
       keys = (await _storage.readAll()).keys;
     } catch (e) {
       debugPrint('日記の日付一覧の復元に失敗しました: $e');
-      return {};
+      return dates;
     }
-    return keys
-        .map(_entryKeyPattern.firstMatch)
-        .whereType<RegExpMatch>()
-        .map((match) => match.group(1)!)
-        .toSet();
+    return {
+      ...dates,
+      ...keys
+          .map(_entryKeyPattern.firstMatch)
+          .whereType<RegExpMatch>()
+          .map((match) => match.group(1)!),
+    };
   }
 
   /// 指定日のエントリがストレージに保存済みか
