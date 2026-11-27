@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../services/photo_storage.dart';
+import 'photo_provider.dart';
 
 class DiaryEntry {
   final File photo;
@@ -103,10 +104,32 @@ class DiaryNotifier extends Notifier<DiaryState> {
   Future<void> saveEntry({required File photo, required String caption}) async {
     final today = DateTime.now().toIso8601String().substring(0, 10);
     final entry = DiaryEntry(photo: photo, caption: caption, date: today);
+    // 同じ日の記録を上書きする場合、前の写真を後で削除するため読んでおく
+    final previous = await _storage.read(key: 'diary_$today');
     await _storage.write(key: 'diary_$today', value: jsonEncode(entry.toJson()));
     final newDates = {...state.datesWithEntries, today};
     await _storage.write(key: _datesKey, value: jsonEncode(newDates.toList()));
     state = state.copyWith(datesWithEntries: newDates);
+
+    if (previous != null) {
+      final previousName = PhotoStorage.toStoredName(
+          (jsonDecode(previous) as Map<String, dynamic>)['photo'] as String);
+      if (previousName != PhotoStorage.toStoredName(photo.path)) {
+        await _deleteReplacedPhoto(previousName);
+      }
+    }
+  }
+
+  /// 上書きで使われなくなった写真を削除する
+  /// 撮影済み写真として残っている場合や、他の日のエントリが参照している場合は削除しない
+  Future<void> _deleteReplacedPhoto(String name) async {
+    try {
+      if ((await loadPendingPhotoNames()).contains(name)) return;
+      final documents = await PhotoStorage.documentsDirectory();
+      await deletePhotosIfUnreferenced([PhotoStorage.resolve(name, documents)]);
+    } catch (_) {
+      // 削除できなくても保存自体は完了しているため無視する
+    }
   }
 }
 
@@ -168,4 +191,19 @@ Future<Set<String>> loadReferencedPhotoNames() async {
     names.add(PhotoStorage.toStoredName(entry['photo'] as String));
   }
   return names;
+}
+
+/// 保存済みエントリから参照されていない写真ファイルだけを削除する
+/// 参照の確認に失敗した場合は、誤削除を避けるため何も削除しない
+Future<void> deletePhotosIfUnreferenced(List<File> files) async {
+  final Set<String> referenced;
+  try {
+    referenced = await loadReferencedPhotoNames();
+  } catch (_) {
+    return;
+  }
+  for (final file in files) {
+    if (referenced.contains(PhotoStorage.toStoredName(file.path))) continue;
+    await PhotoStorage.deleteQuietly(file);
+  }
 }
