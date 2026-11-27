@@ -9,7 +9,14 @@ import 'auth_screen.dart';
 class AppLockGate extends ConsumerStatefulWidget {
   final Widget child;
 
-  const AppLockGate({super.key, required this.child});
+  /// アプリ本体のNavigator（ロック中の戻る操作を止める対象）
+  final GlobalKey<NavigatorState> navigatorKey;
+
+  const AppLockGate({
+    super.key,
+    required this.navigatorKey,
+    required this.child,
+  });
 
   /// アプリが前面から外れている間に内容を隠すカバー（テスト用にキーを公開）
   static const privacyCoverKey = ValueKey('privacyCover');
@@ -92,7 +99,7 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
   /// ロック中は画面スタックの最前面の画面を戻る操作で閉じられないようにする
   /// （システムの戻るボタン・予測型「戻る」ジェスチャーのどちらも止まる）
   void _guardBack() {
-    final navigator = _findNavigator();
+    final navigator = widget.navigatorKey.currentState;
     if (navigator == null) return;
     Route<dynamic>? top;
     // 条件が最前面で成立するので何も閉じずに最前面の画面だけ取得できる
@@ -122,22 +129,6 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
     if (route != null && route.isActive) {
       route.unregisterPopEntry(_lockPopEntry);
     }
-  }
-
-  /// ゲート配下のアプリ本体のNavigatorを探す
-  NavigatorState? _findNavigator() {
-    NavigatorState? result;
-    void visit(Element element) {
-      if (result != null) return;
-      if (element is StatefulElement && element.state is NavigatorState) {
-        result = element.state as NavigatorState;
-        return;
-      }
-      element.visitChildren(visit);
-    }
-
-    context.visitChildElements(visit);
-    return result;
   }
 
   bool _onNavigationNotification(NavigationNotification notification) {

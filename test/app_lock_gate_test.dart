@@ -14,11 +14,10 @@ void main() {
   late ProviderContainer container;
   late DateTime now;
 
-  Future<void> pumpApp(
-    WidgetTester tester, {
-    bool settle = true,
-    GlobalKey<NavigatorState>? navigatorKey,
-  }) async {
+  late GlobalKey<NavigatorState> navigatorKey;
+
+  Future<void> pumpApp(WidgetTester tester, {bool settle = true}) async {
+    navigatorKey = GlobalKey<NavigatorState>();
     now = DateTime(2026, 1, 1, 12);
     container = ProviderContainer(
       overrides: [
@@ -47,7 +46,8 @@ void main() {
               ),
             ),
           ),
-          builder: (context, child) => AppLockGate(child: child!),
+          builder: (context, child) =>
+              AppLockGate(navigatorKey: navigatorKey, child: child!),
         ),
       ),
     );
@@ -327,9 +327,8 @@ void main() {
     });
 
     testWidgets('ロック中に開いた画面も戻る操作で閉じない', (tester) async {
-      final navigatorKey = GlobalKey<NavigatorState>();
       fake = FakeLocalAuthentication();
-      await pumpApp(tester, navigatorKey: navigatorKey);
+      await pumpApp(tester);
       await lockNow(tester);
 
       // 通知タップなどでロック中に画面が積まれるケース

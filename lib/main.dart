@@ -13,6 +13,8 @@ void main() async {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
+  static final navigatorKey = GlobalKey<NavigatorState>();
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -21,9 +23,11 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey),
         useMaterial3: true,
       ),
+      navigatorKey: navigatorKey,
       home: const HomeScreen(),
       // 画面スタックの上にロック画面を重ねる
-      builder: (context, child) => AppLockGate(child: child!),
+      builder: (context, child) =>
+          AppLockGate(navigatorKey: navigatorKey, child: child!),
     );
   }
 }
