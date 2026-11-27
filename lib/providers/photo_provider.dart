@@ -129,15 +129,12 @@ class PhotoNotifier extends Notifier<List<File>> {
   /// 選ばれなかった写真のファイルも削除する。日記エントリの保存後に呼ばれるため、
   /// 選ばれた写真は保存済みエントリから参照されており削除対象にならない。
   Future<void> clear() async {
-    final photos = [...state];
     final documents = await PhotoStorage.documentsDirectory();
-    final json = await _storage.read(key: _storageKey);
-    if (json != null) {
-      for (final item in jsonDecode(json) as List) {
-        final name = item is Map ? item['name'] as String : item as String;
-        photos.add(PhotoStorage.resolve(name, documents));
-      }
-    }
+    final photos = [
+      ...state,
+      for (final name in await loadPendingPhotoNames())
+        PhotoStorage.resolve(name, documents),
+    ];
 
     await _storage.delete(key: _storageKey);
     _captureDates.clear();
@@ -160,6 +157,21 @@ class PhotoNotifier extends Notifier<List<File>> {
       await PhotoStorage.deleteQuietly(file);
     }
   }
+}
+
+/// SecureStorageに保存されている撮影済み写真のファイル名一覧を返す
+/// （新旧どちらの保存形式にも対応する）
+Future<List<String>> loadPendingPhotoNames() async {
+  const storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+  final json = await storage.read(key: PhotoNotifier._storageKey);
+  if (json == null) return [];
+  return [
+    for (final item in jsonDecode(json) as List)
+      PhotoStorage.toStoredName(
+          item is Map ? item['name'] as String : item as String),
+  ];
 }
 
 /// 撮影済み写真のProvider
