@@ -16,14 +16,67 @@ class EditorScreen extends ConsumerStatefulWidget {
 class _EditorScreenState extends ConsumerState<EditorScreen> {
   final TextEditingController _captionController = TextEditingController();
 
-  Future<void> _saveDiary() async {
-    await ref.read(diaryProvider.notifier).saveEntry(
-          photo: widget.selectedPhoto,
-          caption: _captionController.text,
-        );
+  /// 保存フロー（確認ダイアログを含む）の実行中か。同一フレーム内の連続タップも弾く
+  bool _isBusy = false;
 
-    // 保存完了後、未選択の写真をクリアする
-    await ref.read(pendingPhotosProvider.notifier).clear();
+  /// 保存処理中かどうか（ボタンの無効化とインジケーター表示に使う）
+  bool _isSaving = false;
+
+  /// 今日の日記が保存済みの場合に上書きしてよいか確認する
+  Future<bool> _confirmOverwrite() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('上書きの確認'),
+        content: const Text('今日の日記は保存済みです。上書きしますか？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('上書きする'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  Future<void> _saveDiary() async {
+    // 保存中・確認ダイアログ表示中の再タップは無視する
+    if (_isBusy) return;
+    _isBusy = true;
+
+    try {
+      // 今日の日記が既にある場合は上書きの確認を取る
+      if (ref.read(diaryProvider).hasEntryToday) {
+        final confirmed = await _confirmOverwrite();
+        if (!confirmed || !mounted) {
+          _isBusy = false;
+          return;
+        }
+      }
+
+      setState(() => _isSaving = true);
+      await ref.read(diaryProvider.notifier).saveEntry(
+            photo: widget.selectedPhoto,
+            caption: _captionController.text,
+          );
+
+      // 保存完了後、未選択の写真をクリアする
+      await ref.read(pendingPhotosProvider.notifier).clear();
+    } catch (_) {
+      // 失敗時はボタンを再度押せるように戻す
+      _isBusy = false;
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('日記の保存に失敗しました')),
+      );
+      return;
+    }
 
     if (!mounted) return;
 
@@ -97,16 +150,29 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
               width: double.infinity,
               height: 56,
               child: ElevatedButton(
-                onPressed: _saveDiary,
+                // 保存中は無効化して二重保存を防ぐ
+                onPressed: _isSaving ? null : _saveDiary,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.blueGrey,
                   foregroundColor: Colors.white,
+                  // 保存中（無効化中）も見た目を保ちインジケーターを見やすくする
+                  disabledBackgroundColor: Colors.blueGrey,
+                  disabledForegroundColor: Colors.white,
                   elevation: 0,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(28),
                   ),
                 ),
-                child: const Text('保存する'),
+                child: _isSaving
+                    ? const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text('保存する'),
               ),
             ),
           ],
