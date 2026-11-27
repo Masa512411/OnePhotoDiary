@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../services/photo_storage.dart';
@@ -82,34 +83,96 @@ class DiaryState {
   }
 }
 
+/// 日記の保存に使うストレージ（テストで差し替えられるようProviderにしている）
+final diaryStorageProvider = Provider<FlutterSecureStorage>(
+  (ref) => const FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  ),
+);
+
 class DiaryNotifier extends Notifier<DiaryState> {
   static const _datesKey = 'diary_dates';
-  static const _storage = FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+
+  /// 日付ごとのエントリのキー（diary_YYYY-MM-DD）
+  static final _entryKeyPattern = RegExp(r'^diary_(\d{4}-\d{2}-\d{2})$');
+
+  FlutterSecureStorage get _storage => ref.read(diaryStorageProvider);
+
+  /// 直近の日付一覧の読み込みに失敗したか（次回の復帰時に再読み込みする）
+  bool _loadFailed = false;
+
+  static String _todayKey() =>
+      DateTime.now().toIso8601String().substring(0, 10);
 
   @override
   DiaryState build() {
+    // 読み込みに失敗していた場合、バックグラウンドから戻ったときに1回だけ再試行する
+    final lifecycleListener = AppLifecycleListener(onResume: _onResume);
+    ref.onDispose(lifecycleListener.dispose);
     _loadDates();
     return const DiaryState();
   }
 
-  Future<void> _loadDates() async {
-    final json = await _storage.read(key: _datesKey);
-    if (json == null) return;
-    final dates = Set<String>.from(jsonDecode(json) as List);
-    state = state.copyWith(datesWithEntries: dates);
+  void _onResume() {
+    if (_loadFailed) _loadDates();
   }
 
+  /// 保存済みの日付一覧を読み込む
+  /// 失敗しても例外は外に出さず、状態も消さない（次回の復帰時に再試行する）
+  Future<void> _loadDates() async {
+    _loadFailed = false;
+    try {
+      final dates = await _readStoredDates();
+      // 読み込み中に保存された日付を消さないよう、現在の状態と合わせる
+      state = state.copyWith(
+        datesWithEntries: {...dates, ...state.datesWithEntries},
+      );
+    } catch (e) {
+      _loadFailed = true;
+      debugPrint('日記の日付一覧の読み込みに失敗しました: $e');
+    }
+  }
+
+  /// ストレージから日付一覧を読む
+  /// 一覧が無い・空の場合は、残っているdiary_YYYY-MM-DDのキーから復元する
+  /// （一覧だけが失われたデータでも過去の日記を表示できるようにするため）
+  Future<Set<String>> _readStoredDates() async {
+    final json = await _storage.read(key: _datesKey);
+    final dates =
+        json == null ? <String>{} : Set<String>.from(jsonDecode(json) as List);
+    if (dates.isNotEmpty) return dates;
+    final keys = (await _storage.readAll()).keys;
+    return keys
+        .map(_entryKeyPattern.firstMatch)
+        .whereType<RegExpMatch>()
+        .map((match) => match.group(1)!)
+        .toSet();
+  }
+
+  /// 指定日のエントリがストレージに保存済みか
+  /// （読み込み前・失敗時のメモリ上の状態に頼らず、上書き確認に使う）
+  Future<bool> hasEntryOn(String dateKey) async =>
+      await _storage.read(key: 'diary_$dateKey') != null;
+
+  /// 今日のエントリがストレージに保存済みか
+  Future<bool> hasEntryToday() => hasEntryOn(_todayKey());
+
   Future<void> saveEntry({required File photo, required String caption}) async {
-    final today = DateTime.now().toIso8601String().substring(0, 10);
+    final today = _todayKey();
     final entry = DiaryEntry(photo: photo, caption: caption, date: today);
+    // 日付一覧はメモリ上の状態ではなく保存済みの一覧に追加する
+    // （読み込み前・失敗時に過去の日付を消さないため。読めなければ保存を中止する）
+    final storedDates = await _readStoredDates();
     // 同じ日の記録を上書きする場合、前の写真を後で削除するため読んでおく
     final previous = await _storage.read(key: 'diary_$today');
     await _storage.write(key: 'diary_$today', value: jsonEncode(entry.toJson()));
-    final newDates = {...state.datesWithEntries, today};
+    final newDates = {...storedDates, today};
     await _storage.write(key: _datesKey, value: jsonEncode(newDates.toList()));
-    state = state.copyWith(datesWithEntries: newDates);
+    state = state.copyWith(
+      datesWithEntries: {...newDates, ...state.datesWithEntries},
+    );
+    // 保存済みの一覧を読めたので、状態は最新になっている
+    _loadFailed = false;
 
     if (previous != null) {
       final previousName = PhotoStorage.toStoredName(
@@ -142,9 +205,7 @@ final diaryEntryProvider =
     FutureProvider.autoDispose.family<DiaryEntry?, String>((ref, dateKey) async {
   // diaryProviderの状態変化（保存後）に追従する
   ref.watch(diaryProvider);
-  const storage = FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+  final storage = ref.watch(diaryStorageProvider);
   final json = await storage.read(key: 'diary_$dateKey');
   if (json == null) return null;
   final documents = await PhotoStorage.documentsDirectory();
@@ -157,9 +218,7 @@ final diaryEntryProvider =
 /// 全エントリを日付降順で返すProvider
 final allDiaryEntriesProvider = FutureProvider<List<DiaryEntry>>((ref) async {
   final diaryState = ref.watch(diaryProvider);
-  const storage = FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+  final storage = ref.watch(diaryStorageProvider);
   final sortedDates = diaryState.datesWithEntries.toList()
     ..sort((a, b) => b.compareTo(a));
   final documents = await PhotoStorage.documentsDirectory();
