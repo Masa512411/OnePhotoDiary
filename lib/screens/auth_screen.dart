@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/auth_provider.dart';
-import 'home_screen.dart';
 
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
@@ -23,16 +22,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authProvider);
-
-    // 認証成功 or 非対応 → ホーム画面へ遷移
-    ref.listen<AuthState>(authProvider, (previous, next) {
-      if (next.status == AuthStatus.authenticated ||
-          next.status == AuthStatus.unsupported) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const HomeScreen()),
-        );
-      }
-    });
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -85,7 +74,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               // エラーメッセージ + リトライボタン
               if (authState.status == AuthStatus.failed) ...[
                 Icon(
-                  Icons.fingerprint,
+                  Icons.lock_outline,
                   size: 64,
                   color: Colors.blueGrey.shade300,
                 ),
@@ -103,7 +92,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   onPressed: () {
                     ref.read(authProvider.notifier).authenticate();
                   },
-                  icon: const Icon(Icons.fingerprint),
+                  icon: const Icon(Icons.lock_outline),
                   label: const Text('もう一度認証する'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blueGrey,
@@ -122,13 +111,13 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               // 初期状態（認証前）
               if (authState.status == AuthStatus.initial) ...[
                 Icon(
-                  Icons.fingerprint,
+                  Icons.lock_outline,
                   size: 64,
                   color: Colors.blueGrey.shade300,
                 ),
                 const SizedBox(height: 16),
                 const Text(
-                  '指紋認証でロックを解除',
+                  'ロックを解除してください',
                   style: TextStyle(
                     color: Colors.black54,
                     fontSize: 16,

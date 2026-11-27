@@ -1,14 +1,15 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:local_auth/error_codes.dart' as auth_error;
 import 'package:local_auth/local_auth.dart';
 
 /// 認証の状態を表すenum
 enum AuthStatus {
-  initial,        // 初期状態
+  initial,        // 初期状態（ロック中）
   authenticating, // 認証中
   authenticated,  // 認証成功
   failed,         // 認証失敗
-  unsupported,    // 生体認証非対応
+  unsupported,    // 端末に画面ロックが未設定（保護対象なしとして通す）
 }
 
 /// 認証状態を保持するクラス
@@ -21,6 +22,10 @@ class AuthState {
     this.errorMessage,
   });
 
+  /// ロックが解除されているか
+  bool get isUnlocked =>
+      status == AuthStatus.authenticated || status == AuthStatus.unsupported;
+
   AuthState copyWith({
     AuthStatus? status,
     String? errorMessage,
@@ -32,44 +37,44 @@ class AuthState {
   }
 }
 
+/// LocalAuthenticationのProvider（テストで差し替え可能にする）
+final localAuthProvider = Provider<LocalAuthentication>(
+  (ref) => LocalAuthentication(),
+);
+
 /// 認証状態を管理するNotifier
 class AuthNotifier extends Notifier<AuthState> {
-  final LocalAuthentication _localAuth = LocalAuthentication();
+  LocalAuthentication get _localAuth => ref.read(localAuthProvider);
 
   @override
   AuthState build() {
     return const AuthState();
   }
 
-  /// 生体認証を実行する
+  /// 端末認証（生体認証 or パスコード）を実行する
   Future<void> authenticate() async {
-    // 生体認証の利用可否をチェック
-    try {
-      final canCheckBiometrics = await _localAuth.canCheckBiometrics;
-      final isDeviceSupported = await _localAuth.isDeviceSupported();
-
-      if (!canCheckBiometrics || !isDeviceSupported) {
-        state = state.copyWith(status: AuthStatus.unsupported);
-        return;
-      }
-    } on PlatformException {
-      state = state.copyWith(status: AuthStatus.unsupported);
-      return;
-    }
-
-    // 認証中に設定
+    // 認証ダイアログの多重表示を防ぐ（awaitより前に状態を変える）
+    if (state.status == AuthStatus.authenticating) return;
     state = state.copyWith(
       status: AuthStatus.authenticating,
       errorMessage: null,
     );
 
-    // 生体認証を実行
+    // 端末に画面ロックがなければ保護対象なしとして通す
+    if (!await _isDeviceSupported()) {
+      state = state.copyWith(status: AuthStatus.unsupported);
+      return;
+    }
+
+    // 生体認証が使えない場合はパスコードにフォールバック
     try {
       final authenticated = await _localAuth.authenticate(
         localizedReason: 'アプリのロックを解除してください',
         options: const AuthenticationOptions(
           stickyAuth: true,
-          biometricOnly: true,
+          biometricOnly: false,
+          // trueだとiOSで設定誘導ダイアログ経由の「失敗」になり、エラーコードが取れない
+          useErrorDialogs: false,
         ),
       );
 
@@ -82,11 +87,47 @@ class AuthNotifier extends Notifier<AuthState> {
         );
       }
     } on PlatformException catch (e) {
+      if (await _isNoScreenLockError(e)) {
+        state = state.copyWith(status: AuthStatus.unsupported);
+        return;
+      }
       state = state.copyWith(
         status: AuthStatus.failed,
         errorMessage: '認証エラーが発生しました: ${e.message}',
       );
     }
+  }
+
+  /// 画面ロックなしで通過中に端末へ画面ロックが設定されたらロックする
+  Future<void> recheckDeviceLock() async {
+    if (state.status != AuthStatus.unsupported) return;
+    if (await _isDeviceSupported()) lock();
+  }
+
+  /// ロック状態に戻す（バックグラウンド復帰時の再ロック用）
+  void lock() {
+    if (!state.isUnlocked) return;
+    state = const AuthState();
+  }
+
+  /// 端末で認証（生体認証 or パスコード）が利用可能か
+  /// 判定できない場合はロックを外さないよう「利用可能」とみなす
+  Future<bool> _isDeviceSupported() async {
+    try {
+      return await _localAuth.isDeviceSupported();
+    } on PlatformException {
+      return true;
+    }
+  }
+
+  /// 端末に画面ロックが設定されていないことを示すエラーか
+  Future<bool> _isNoScreenLockError(PlatformException e) async {
+    if (e.code == auth_error.passcodeNotSet) return true;
+    // iOSはシステムによるキャンセル等もNotAvailableになるため、端末の状態を再確認する
+    if (e.code == auth_error.notAvailable || e.code == auth_error.notEnrolled) {
+      return !await _isDeviceSupported();
+    }
+    return false;
   }
 }
 
@@ -94,3 +135,34 @@ class AuthNotifier extends Notifier<AuthState> {
 final authProvider = NotifierProvider<AuthNotifier, AuthState>(
   () => AuthNotifier(),
 );
+
+/// バックグラウンド復帰時に再ロックするかを判定するクラス
+class RelockTimer {
+  /// この時間以上バックグラウンドにいたら再ロックする
+  /// （カメラや認証ダイアログによる短時間の離脱ではロックしないための猶予）
+  static const Duration lockAfter = Duration(seconds: 60);
+
+  final Duration _lockAfter;
+  final DateTime Function() _now;
+  DateTime? _backgroundedAt;
+
+  RelockTimer({Duration? lockAfter, DateTime Function()? now})
+      : _lockAfter = lockAfter ?? RelockTimer.lockAfter,
+        _now = now ?? DateTime.now;
+
+  /// バックグラウンドに入った時刻を記録（hidden→pausedの順に来るので最初の時刻を保持）
+  void markBackground() {
+    _backgroundedAt ??= _now();
+  }
+
+  /// 復帰時に呼ぶ。猶予時間を超えていればtrue
+  bool shouldLockOnResume() {
+    final backgroundedAt = _backgroundedAt;
+    _backgroundedAt = null;
+    if (backgroundedAt == null) return false;
+    return _now().difference(backgroundedAt) >= _lockAfter;
+  }
+}
+
+/// 再ロック判定のProvider（テストで時刻を差し替え可能にする）
+final relockTimerProvider = Provider<RelockTimer>((ref) => RelockTimer());
