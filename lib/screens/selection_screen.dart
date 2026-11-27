@@ -74,7 +74,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
                       boxShadow: [
                         if (isSelected)
                           BoxShadow(
-                            color: Colors.blueGrey.withOpacity(0.3),
+                            color: Colors.blueGrey.withValues(alpha: 0.3),
                             blurRadius: 10,
                             spreadRadius: 2,
                           )
@@ -97,7 +97,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
                           ),
                           if (isSelected)
                             Container(
-                              color: Colors.black.withOpacity(0.2),
+                              color: Colors.black.withValues(alpha: 0.2),
                               child: const Center(
                                 child: Icon(
                                   Icons.check_circle,
