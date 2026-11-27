@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:one_photo_diary/providers/auth_provider.dart';
 import 'package:one_photo_diary/screens/app_lock_gate.dart';
 
-import 'auth_provider_test.dart' show FakeLocalAuthentication;
+import 'helpers/fake_local_auth.dart';
 
 void main() {
   testWidgets('再ロックしても画面スタックが保持される', (tester) async {
