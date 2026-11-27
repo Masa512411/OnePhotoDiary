@@ -46,11 +46,12 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
 
   void _onResume() {
     final notifier = ref.read(authProvider.notifier);
-    if (ref.read(relockTimerProvider).shouldLockOnResume()) {
-      notifier.lock();
-    } else {
-      // 離脱中に画面ロックが設定された場合は猶予時間に関係なくロック
+    final shouldLock = ref.read(relockTimerProvider).shouldLockOnResume();
+    if (ref.read(authProvider).status == AuthStatus.unsupported) {
+      // 画面ロックなしの端末はロック画面を出さず、画面ロックが設定されたかだけ確認
       notifier.recheckDeviceLock();
+    } else if (shouldLock) {
+      notifier.lock();
     }
   }
 

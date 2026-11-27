@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,7 +13,7 @@ void main() {
   late ProviderContainer container;
   late DateTime now;
 
-  Future<void> pumpApp(WidgetTester tester) async {
+  Future<void> pumpApp(WidgetTester tester, {bool settle = true}) async {
     now = DateTime(2026, 1, 1, 12);
     container = ProviderContainer(
       overrides: [
@@ -41,11 +43,11 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    // 認証中はインジケーターが動き続けるので落ち着くのを待たない
+    settle ? await tester.pumpAndSettle() : await tester.pump();
   }
 
-  /// HOMEキーでバックグラウンドへ移り、指定時間後に復帰する
-  Future<void> backgroundFor(WidgetTester tester, Duration duration) async {
+  void goBackground(WidgetTester tester) {
     for (final s in [
       AppLifecycleState.inactive,
       AppLifecycleState.hidden,
@@ -53,7 +55,9 @@ void main() {
     ]) {
       tester.binding.handleAppLifecycleStateChanged(s);
     }
-    now = now.add(duration);
+  }
+
+  Future<void> resume(WidgetTester tester) async {
     for (final s in [
       AppLifecycleState.hidden,
       AppLifecycleState.inactive,
@@ -62,6 +66,13 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(s);
     }
     await tester.pumpAndSettle();
+  }
+
+  /// HOMEキーでバックグラウンドへ移り、指定時間後に復帰する
+  Future<void> backgroundFor(WidgetTester tester, Duration duration) async {
+    goBackground(tester);
+    now = now.add(duration);
+    await resume(tester);
   }
 
   final lockScreen = find.text('もう一度認証する');
@@ -133,5 +144,53 @@ void main() {
 
     expect(fake.authenticateCalls, 1);
     expect(lockScreen, findsOneWidget);
+  });
+
+  testWidgets('画面ロックなしの端末は60秒以上離脱してもロック画面を出さない', (tester) async {
+    fake = FakeLocalAuthentication(deviceSupported: [false]);
+    await pumpApp(tester);
+    final statuses = <AuthStatus>[];
+    container.listen<AuthState>(
+      authProvider,
+      (_, next) => statuses.add(next.status),
+    );
+
+    await backgroundFor(tester, const Duration(seconds: 61));
+
+    expect(statuses, isEmpty);
+    expect(find.text('ホーム'), findsOneWidget);
+  });
+
+  testWidgets('認証中のバックグラウンド時間は再ロックの対象外', (tester) async {
+    // Androidのパスコード画面など、認証中にアプリが裏に回るケース
+    fake = FakeLocalAuthentication()..pendingAuth = Completer<bool>();
+    await pumpApp(tester, settle: false);
+    await tester.pump();
+    expect(container.read(authProvider).status, AuthStatus.authenticating);
+
+    goBackground(tester);
+    now = now.add(const Duration(seconds: 61));
+    fake.pendingAuth!.complete(true);
+    await resume(tester);
+
+    expect(fake.authenticateCalls, 1);
+    expect(find.text('ホーム'), findsOneWidget);
+  });
+
+  testWidgets('認証失敗中のバックグラウンド時間は再ロックの対象外', (tester) async {
+    fake = FakeLocalAuthentication(authResult: false);
+    await pumpApp(tester);
+    expect(lockScreen, findsOneWidget);
+
+    await backgroundFor(tester, const Duration(seconds: 61));
+    fake.authResult = true;
+    await tester.tap(lockScreen);
+    await tester.pumpAndSettle();
+
+    // 解除後の短い離脱で、失敗中の時間が加算されて再ロックされない
+    await backgroundFor(tester, const Duration(seconds: 1));
+
+    expect(fake.authenticateCalls, 2);
+    expect(find.text('ホーム'), findsOneWidget);
   });
 }
