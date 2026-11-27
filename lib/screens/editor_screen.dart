@@ -51,7 +51,15 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
 
     try {
       // 今日の日記が既にある場合は上書きの確認を取る
-      if (ref.read(diaryProvider).hasEntryToday) {
+      // 日付一覧の読み込み前・失敗時でも確認できるよう、ストレージを直接確認する
+      // （確認に失敗した場合は保存失敗として扱う）
+      final hasEntryToday =
+          await ref.read(diaryProvider.notifier).hasEntryToday();
+      if (!mounted) {
+        _isBusy = false;
+        return;
+      }
+      if (hasEntryToday) {
         final confirmed = await _confirmOverwrite();
         if (!confirmed || !mounted) {
           _isBusy = false;
