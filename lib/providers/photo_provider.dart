@@ -1,11 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as path;
+import 'package:uuid/uuid.dart';
+import '../services/photo_storage.dart';
+import 'diary_provider.dart';
 
 /// 撮影済み写真（pending_photos）を管理するNotifier
 class PhotoNotifier extends Notifier<List<File>> {
@@ -16,31 +18,94 @@ class PhotoNotifier extends Notifier<List<File>> {
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
   );
 
+  /// 写真ファイル名 → 撮影日（yyyy-MM-dd）
+  final Map<String, String> _captureDates = {};
+
+  // 読み込みと変更を順番に実行するためのキュー
+  // （読み込み中に撮影が完了すると、読み込み結果で新しい写真が上書きされるため）
+  Future<void> _queue = Future.value();
+
   @override
   List<File> build() {
-    _loadFromStorage();
+    // 前日以前の写真を破棄するのはアプリ起動時の読み込みだけ
+    _serialized(() => _loadFromStorage(discardStale: true));
     return [];
   }
 
-  /// SecureStorageから写真パスを読み込む
-  Future<void> _loadFromStorage() async {
-    final json = await _storage.read(key: _storageKey);
-    if (json != null) {
-      final paths = List<String>.from(jsonDecode(json));
-      state = paths.map((p) => File(p)).toList();
-    }
+  String _todayKey() =>
+      ref.read(clockProvider)().toIso8601String().substring(0, 10);
+
+  /// 前の処理が終わってから[action]を実行する
+  Future<T> _serialized<T>(Future<T> Function() action) {
+    final result = _queue.then((_) => action());
+    _queue = result.then((_) {}, onError: (_) {});
+    return result;
   }
 
-  /// SecureStorageに写真パスを保存する
+  /// SecureStorageから写真を読み込む
+  /// 保存値はファイル名（旧データは絶対パス）なので、現在のDocumentsディレクトリで解決する。
+  /// [discardStale]がtrueなら、前日以前に撮影された写真は今日の候補ではないため、
+  /// 一覧から外してファイルも削除する。
+  Future<void> _loadFromStorage({required bool discardStale}) async {
+    final json = await _storage.read(key: _storageKey);
+    if (json == null) return;
+    final documents = await PhotoStorage.documentsDirectory();
+    final today = _todayKey();
+
+    final kept = <String, String>{};
+    final stale = <File>[];
+    var changed = false;
+    for (final item in jsonDecode(json) as List) {
+      final String name;
+      String? date;
+      if (item is Map) {
+        name = PhotoStorage.toStoredName(item['name'] as String);
+        date = item['date'] as String?;
+      } else {
+        // 旧形式（絶対パスのみ・撮影日なし）はファイルの更新日時を撮影日とみなす
+        name = PhotoStorage.toStoredName(item as String);
+        changed = true;
+      }
+      final file = PhotoStorage.resolve(name, documents);
+      if (!await file.exists()) {
+        changed = true;
+        continue;
+      }
+      date ??= (await file.lastModified()).toIso8601String().substring(0, 10);
+      if (date == today || !discardStale) {
+        kept[name] = date;
+      } else {
+        stale.add(file);
+        changed = true;
+      }
+    }
+
+    if (stale.isNotEmpty) {
+      // 保存済みエントリが参照している写真は絶対に削除しない
+      // （保存直後にpendingのクリア前でアプリが終了した場合など）
+      await deletePhotosIfUnreferenced(stale);
+    }
+
+    _captureDates
+      ..clear()
+      ..addAll(kept);
+    state = kept.keys.map((n) => PhotoStorage.resolve(n, documents)).toList();
+    if (changed) await _saveToStorage();
+  }
+
+  /// SecureStorageに写真のファイル名と撮影日を保存する
   Future<void> _saveToStorage() async {
-    final paths = state.map((f) => f.path).toList();
-    await _storage.write(key: _storageKey, value: jsonEncode(paths));
+    final items = state.map((f) {
+      final name = PhotoStorage.toStoredName(f.path);
+      return {'name': name, 'date': _captureDates[name] ?? _todayKey()};
+    }).toList();
+    await _storage.write(key: _storageKey, value: jsonEncode(items));
   }
 
   /// SecureStorageから写真パスを再読み込みする（画面復帰時用）
-  Future<void> reload() async {
-    await _loadFromStorage();
-  }
+  /// 撮影直後に日付が変わった写真を消さないよう、ここでは前日以前の写真も破棄しない
+  Future<void> reload() =>
+      _serialized(() => _loadFromStorage(discardStale: false));
 
   /// カメラで写真を撮影して追加する（EXIFデータを除去して保存）
   Future<bool> takePhoto() async {
@@ -50,21 +115,7 @@ class PhotoNotifier extends Notifier<List<File>> {
     try {
       final XFile? photo = await picker.pickImage(source: ImageSource.camera);
       if (photo != null) {
-        final directory = await getApplicationDocumentsDirectory();
-        final fileName = path.basename(photo.path);
-        final destPath = '${directory.path}/$fileName';
-
-        final rawBytes = await File(photo.path).readAsBytes();
-        final decoded = img.decodeImage(rawBytes);
-        if (decoded == null) throw Exception('画像のデコードに失敗しました');
-
-        // EXIFなしでJPEGとして再エンコード
-        final cleanBytes = img.encodeJpg(decoded, quality: 95);
-        final savedImage = await File(destPath).writeAsBytes(cleanBytes);
-
-        state = [...state, savedImage];
-        await _saveToStorage();
-        return true;
+        return await addPhoto(photo.path) != null;
       }
     } catch (e) {
       rethrow;
@@ -72,11 +123,66 @@ class PhotoNotifier extends Notifier<List<File>> {
     return false;
   }
 
+  /// 撮影した画像をEXIFなしでDocumentsに保存し、撮影済み写真に追加する
+  /// 上限に達している場合はnullを返す
+  @visibleForTesting
+  Future<File?> addPhoto(String sourcePath) => _serialized(() async {
+        if (state.length >= maxPhotos) return null;
+
+        // ファイル名で写真を識別・削除するため、衝突しないUUIDで命名する
+        final directory = await PhotoStorage.documentsDirectory();
+        final fileName = '${const Uuid().v4()}.jpg';
+        final destPath = PhotoStorage.resolve(fileName, directory).path;
+
+        final rawBytes = await File(sourcePath).readAsBytes();
+        final decoded = img.decodeImage(rawBytes);
+        if (decoded == null) throw Exception('画像のデコードに失敗しました');
+
+        // EXIFなしでJPEGとして再エンコード
+        final cleanBytes = img.encodeJpg(decoded, quality: 95);
+        final savedImage = await File(destPath).writeAsBytes(cleanBytes);
+
+        _captureDates[fileName] = _todayKey();
+        state = [...state, savedImage];
+        await _saveToStorage();
+        return savedImage;
+      });
+
   /// 保存完了後に写真をクリアする
-  Future<void> clear() async {
-    await _storage.delete(key: _storageKey);
-    state = [];
-  }
+  /// 選ばれなかった写真のファイルも削除する。日記エントリの保存後に呼ばれるため、
+  /// 選ばれた写真は保存済みエントリから参照されており削除対象にならない。
+  Future<void> clear() => _serialized(() async {
+        final documents = await PhotoStorage.documentsDirectory();
+        final photos = [
+          ...state,
+          for (final name in await loadPendingPhotoNames())
+            PhotoStorage.resolve(name, documents),
+        ];
+
+        await _storage.delete(key: _storageKey);
+        _captureDates.clear();
+        state = [];
+
+        await deletePhotosIfUnreferenced(photos);
+      });
+}
+
+/// 現在時刻のProvider（テストで日付の変わり目を再現できるよう差し替え可能にする）
+final clockProvider = Provider<DateTime Function()>((ref) => DateTime.now);
+
+/// SecureStorageに保存されている撮影済み写真のファイル名一覧を返す
+/// （新旧どちらの保存形式にも対応する）
+Future<List<String>> loadPendingPhotoNames() async {
+  const storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+  final json = await storage.read(key: PhotoNotifier._storageKey);
+  if (json == null) return [];
+  return [
+    for (final item in jsonDecode(json) as List)
+      PhotoStorage.toStoredName(
+          item is Map ? item['name'] as String : item as String),
+  ];
 }
 
 /// 撮影済み写真のProvider

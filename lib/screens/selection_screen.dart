@@ -74,7 +74,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
                       boxShadow: [
                         if (isSelected)
                           BoxShadow(
-                            color: Colors.blueGrey.withOpacity(0.3),
+                            color: Colors.blueGrey.withValues(alpha: 0.3),
                             blurRadius: 10,
                             spreadRadius: 2,
                           )
@@ -88,10 +88,16 @@ class _SelectionScreenState extends State<SelectionScreen> {
                           Image.file(
                             widget.photos[index],
                             fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Container(
+                              color: Colors.grey[200],
+                              alignment: Alignment.center,
+                              child: const Icon(Icons.broken_image_outlined,
+                                  color: Colors.black26, size: 48),
+                            ),
                           ),
                           if (isSelected)
                             Container(
-                              color: Colors.black.withOpacity(0.2),
+                              color: Colors.black.withValues(alpha: 0.2),
                               child: const Center(
                                 child: Icon(
                                   Icons.check_circle,
