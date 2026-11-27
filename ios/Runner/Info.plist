@@ -47,5 +47,7 @@
 	<true/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>アプリのロック解除に生体認証を使用します</string>
+	<key>NSCameraUsageDescription</key>
+	<string>今日の一枚を撮影するためにカメラを使用します</string>
 </dict>
 </plist>
