@@ -64,9 +64,6 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
             photo: widget.selectedPhoto,
             caption: _captionController.text,
           );
-
-      // 保存完了後、未選択の写真をクリアする
-      await ref.read(pendingPhotosProvider.notifier).clear();
     } catch (_) {
       // 失敗時はボタンを再度押せるように戻す
       _isBusy = false;
@@ -76,6 +73,14 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
         const SnackBar(content: Text('日記の保存に失敗しました')),
       );
       return;
+    }
+
+    // 保存完了後、未選択の写真をクリアする
+    // 日記自体は保存済みなので、クリアに失敗しても保存成功として扱う
+    try {
+      await ref.read(pendingPhotosProvider.notifier).clear();
+    } catch (e) {
+      debugPrint('未選択の写真のクリアに失敗しました: $e');
     }
 
     if (!mounted) return;
@@ -95,8 +100,20 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 保存中に画面を閉じると結果が分からなくなるため、戻る操作を止める
+    return PopScope(
+      canPop: !_isSaving,
+      child: _buildScaffold(),
+    );
+  }
+
+  Widget _buildScaffold() {
     return Scaffold(
       appBar: AppBar(
+        // 保存中は戻るボタンを無効化する
+        leading: _isSaving
+            ? const IconButton(icon: BackButtonIcon(), onPressed: null)
+            : null,
         title: const Text('記録する'),
         centerTitle: true,
         backgroundColor: Colors.transparent,

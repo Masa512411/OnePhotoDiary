@@ -37,17 +37,22 @@ class FakeDiaryNotifier extends DiaryNotifier {
 
 /// ストレージに触れないPhotoNotifier
 class FakePhotoNotifier extends PhotoNotifier {
+  /// trueならクリア処理で例外を投げる
+  bool failClear = false;
+
   @override
   List<File> build() => [];
 
   @override
   Future<void> clear() async {
+    if (failClear) throw Exception('クリア失敗');
     state = [];
   }
 }
 
 void main() {
   late FakeDiaryNotifier diary;
+  late FakePhotoNotifier photos;
 
   Future<void> pumpEditor(
     WidgetTester tester, {
@@ -59,11 +64,12 @@ void main() {
     addTearDown(tester.view.reset);
 
     diary = FakeDiaryNotifier(hasTodayEntry: hasTodayEntry);
+    photos = FakePhotoNotifier();
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           diaryProvider.overrideWith(() => diary),
-          pendingPhotosProvider.overrideWith(() => FakePhotoNotifier()),
+          pendingPhotosProvider.overrideWith(() => photos),
         ],
         child: MaterialApp(
           home: Builder(
@@ -195,5 +201,54 @@ void main() {
     expect(find.text('日記の保存に失敗しました'), findsOneWidget);
     expect(find.byType(EditorScreen), findsOneWidget);
     expect(tester.widget<ElevatedButton>(saveButton()).onPressed, isNotNull);
+  });
+
+  testWidgets('保存中は戻る操作で編集画面を閉じられない', (tester) async {
+    await pumpEditor(tester);
+    diary.saveGate = Completer<void>();
+
+    await tester.tap(saveButton());
+    await tester.pump();
+
+    // AppBarの戻るボタンは無効化される
+    final backButton = tester.widget<IconButton>(
+      find.descendant(
+        of: find.byType(AppBar),
+        matching: find.byType(IconButton),
+      ),
+    );
+    expect(backButton.onPressed, isNull);
+
+    // システムの戻る操作（Android の戻る・iOS のスワイプ相当）も無視される
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(find.byType(EditorScreen), findsOneWidget);
+
+    // 保存が終われば通常どおり完了表示してホームに戻る
+    diary.saveGate!.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('日記を保存しました！'), findsOneWidget);
+    expect(find.byType(EditorScreen), findsNothing);
+  });
+
+  testWidgets('保存前は戻る操作で編集画面を閉じられる', (tester) async {
+    await pumpEditor(tester);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byType(EditorScreen), findsNothing);
+  });
+
+  testWidgets('写真のクリアに失敗しても保存成功として扱う', (tester) async {
+    await pumpEditor(tester);
+    photos.failClear = true;
+
+    await tester.tap(saveButton());
+    await tester.pumpAndSettle();
+
+    expect(diary.saveCount, 1);
+    expect(find.text('日記の保存に失敗しました'), findsNothing);
+    expect(find.text('日記を保存しました！'), findsOneWidget);
+    expect(find.byType(EditorScreen), findsNothing);
   });
 }
