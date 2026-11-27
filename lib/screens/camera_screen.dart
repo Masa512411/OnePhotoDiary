@@ -50,6 +50,14 @@ class CameraScreen extends ConsumerWidget {
                         fit: BoxFit.cover,
                         width: double.infinity,
                         height: double.infinity,
+                        errorBuilder: (_, _, _) => Container(
+                          width: double.infinity,
+                          height: double.infinity,
+                          color: Colors.grey[200],
+                          alignment: Alignment.center,
+                          child: const Icon(Icons.broken_image_outlined,
+                              color: Colors.black26, size: 48),
+                        ),
                       ),
                     ),
                     Positioned(

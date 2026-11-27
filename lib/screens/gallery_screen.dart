@@ -72,6 +72,14 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
                 width: double.infinity,
                 height: 280,
                 fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => Container(
+                  width: double.infinity,
+                  height: 280,
+                  color: Colors.grey[200],
+                  alignment: Alignment.center,
+                  child: const Icon(Icons.broken_image_outlined,
+                      color: Colors.black26, size: 48),
+                ),
               ),
             ),
           ),
@@ -142,7 +150,15 @@ class _FullscreenPhotoScreen extends StatelessWidget {
             Expanded(
               child: InteractiveViewer(
                 child: Center(
-                  child: Image.file(entry.photo, fit: BoxFit.contain),
+                  child: Image.file(
+                    entry.photo,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, _, _) => const Icon(
+                      Icons.broken_image_outlined,
+                      color: Colors.white38,
+                      size: 64,
+                    ),
+                  ),
                 ),
               ),
             ),

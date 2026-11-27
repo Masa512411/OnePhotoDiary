@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../services/photo_storage.dart';
 
 class DiaryEntry {
   final File photo;
@@ -14,14 +15,25 @@ class DiaryEntry {
     required this.date,
   });
 
-  factory DiaryEntry.fromJson(Map<String, dynamic> json) => DiaryEntry(
-        photo: File(json['photo'] as String),
-        caption: json['caption'] as String,
-        date: json['date'] as String,
-      );
+  /// [documents]を渡すと、保存されたファイル名（旧データは絶対パス）を
+  /// 現在のDocumentsディレクトリ上のパスに解決する
+  factory DiaryEntry.fromJson(
+    Map<String, dynamic> json, {
+    Directory? documents,
+  }) {
+    final stored = json['photo'] as String;
+    return DiaryEntry(
+      photo: documents != null
+          ? PhotoStorage.resolve(stored, documents)
+          : File(stored),
+      caption: json['caption'] as String,
+      date: json['date'] as String,
+    );
+  }
 
+  /// 写真はDocumentsディレクトリからのファイル名のみで保存する
   Map<String, dynamic> toJson() => {
-        'photo': photo.path,
+        'photo': PhotoStorage.toStoredName(photo.path),
         'caption': caption,
         'date': date,
       };
@@ -112,7 +124,11 @@ final diaryEntryProvider =
   );
   final json = await storage.read(key: 'diary_$dateKey');
   if (json == null) return null;
-  return DiaryEntry.fromJson(jsonDecode(json) as Map<String, dynamic>);
+  final documents = await PhotoStorage.documentsDirectory();
+  return DiaryEntry.fromJson(
+    jsonDecode(json) as Map<String, dynamic>,
+    documents: documents,
+  );
 });
 
 /// 全エントリを日付降順で返すProvider
@@ -123,11 +139,33 @@ final allDiaryEntriesProvider = FutureProvider<List<DiaryEntry>>((ref) async {
   );
   final sortedDates = diaryState.datesWithEntries.toList()
     ..sort((a, b) => b.compareTo(a));
+  final documents = await PhotoStorage.documentsDirectory();
   final entries = <DiaryEntry>[];
   for (final date in sortedDates) {
     final json = await storage.read(key: 'diary_$date');
     if (json == null) continue;
-    entries.add(DiaryEntry.fromJson(jsonDecode(json) as Map<String, dynamic>));
+    entries.add(DiaryEntry.fromJson(
+      jsonDecode(json) as Map<String, dynamic>,
+      documents: documents,
+    ));
   }
   return entries;
 });
+
+/// 保存済みの日記エントリが参照している写真のファイル名一覧を返す
+/// （写真ファイル削除時に、保存済みエントリの写真を誤って消さないために使う）
+Future<Set<String>> loadReferencedPhotoNames() async {
+  const storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+  final datesJson = await storage.read(key: DiaryNotifier._datesKey);
+  if (datesJson == null) return {};
+  final names = <String>{};
+  for (final date in List<String>.from(jsonDecode(datesJson) as List)) {
+    final json = await storage.read(key: 'diary_$date');
+    if (json == null) continue;
+    final entry = jsonDecode(json) as Map<String, dynamic>;
+    names.add(PhotoStorage.toStoredName(entry['photo'] as String));
+  }
+  return names;
+}

@@ -4,8 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as path;
+import 'package:uuid/uuid.dart';
+import '../services/photo_storage.dart';
 
 /// 撮影済み写真（pending_photos）を管理するNotifier
 class PhotoNotifier extends Notifier<List<File>> {
@@ -22,19 +22,21 @@ class PhotoNotifier extends Notifier<List<File>> {
     return [];
   }
 
-  /// SecureStorageから写真パスを読み込む
+  /// SecureStorageから写真を読み込む
+  /// 保存値はファイル名（旧データは絶対パス）なので、現在のDocumentsディレクトリで解決する
   Future<void> _loadFromStorage() async {
     final json = await _storage.read(key: _storageKey);
     if (json != null) {
-      final paths = List<String>.from(jsonDecode(json));
-      state = paths.map((p) => File(p)).toList();
+      final documents = await PhotoStorage.documentsDirectory();
+      final names = List<String>.from(jsonDecode(json));
+      state = names.map((n) => PhotoStorage.resolve(n, documents)).toList();
     }
   }
 
-  /// SecureStorageに写真パスを保存する
+  /// SecureStorageに写真のファイル名を保存する
   Future<void> _saveToStorage() async {
-    final paths = state.map((f) => f.path).toList();
-    await _storage.write(key: _storageKey, value: jsonEncode(paths));
+    final names = state.map((f) => PhotoStorage.toStoredName(f.path)).toList();
+    await _storage.write(key: _storageKey, value: jsonEncode(names));
   }
 
   /// SecureStorageから写真パスを再読み込みする（画面復帰時用）
@@ -50,9 +52,10 @@ class PhotoNotifier extends Notifier<List<File>> {
     try {
       final XFile? photo = await picker.pickImage(source: ImageSource.camera);
       if (photo != null) {
-        final directory = await getApplicationDocumentsDirectory();
-        final fileName = path.basename(photo.path);
-        final destPath = '${directory.path}/$fileName';
+        // ファイル名で写真を識別・削除するため、衝突しないUUIDで命名する
+        final directory = await PhotoStorage.documentsDirectory();
+        final fileName = '${const Uuid().v4()}.jpg';
+        final destPath = PhotoStorage.resolve(fileName, directory).path;
 
         final rawBytes = await File(photo.path).readAsBytes();
         final decoded = img.decodeImage(rawBytes);

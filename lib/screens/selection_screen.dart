@@ -88,6 +88,12 @@ class _SelectionScreenState extends State<SelectionScreen> {
                           Image.file(
                             widget.photos[index],
                             fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Container(
+                              color: Colors.grey[200],
+                              alignment: Alignment.center,
+                              child: const Icon(Icons.broken_image_outlined,
+                                  color: Colors.black26, size: 48),
+                            ),
                           ),
                           if (isSelected)
                             Container(
