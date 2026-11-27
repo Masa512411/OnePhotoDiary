@@ -44,7 +44,7 @@ class ReminderNotifier extends Notifier<ReminderState> {
 
   @override
   ReminderState build() {
-    // 予約は14日分だけなので、バックグラウンドから戻るたびに予約を延長する
+    // 予約は scheduleDays 日分だけなので、バックグラウンドから戻るたびに予約を延長する
     final lifecycleListener = AppLifecycleListener(onResume: reschedule);
     ref.onDispose(lifecycleListener.dispose);
     // エントリ保存・削除時（起動直後の読み込み完了を含む）に再スケジュールして、記録済みの日をスキップ

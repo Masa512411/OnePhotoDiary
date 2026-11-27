@@ -5,18 +5,48 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:one_photo_diary/services/notification_service.dart';
 import 'package:timezone/timezone.dart' as tz;
 
-/// テスト用のFlutterLocalNotificationsPlugin（予約内容を記録する）
+/// テスト用のFlutterLocalNotificationsPlugin（予約・表示中の通知を記録する）
 class FakeNotificationsPlugin implements FlutterLocalNotificationsPlugin {
   /// 予約中の通知（id → 予約日時）
   final scheduled = <int, tz.TZDateTime>{};
+  final payloads = <int, String?>{};
   final matchComponents = <int, DateTimeComponents?>{};
+
+  /// 通知センターに表示中の通知のID
+  final displayed = <int>{};
+
+  final cancelledIds = <int>[];
+  final scheduledIds = <int>[];
   int cancelAllCalls = 0;
+
+  /// 予約中の通知が届いたことにする（予約一覧から消え、表示中になる）
+  void deliver(int id) {
+    scheduled.remove(id);
+    payloads.remove(id);
+    displayed.add(id);
+  }
+
+  @override
+  Future<List<PendingNotificationRequest>>
+  pendingNotificationRequests() async => [
+    for (final id in scheduled.keys)
+      PendingNotificationRequest(id, null, null, payloads[id]),
+  ];
+
+  @override
+  Future<void> cancel(int id, {String? tag}) async {
+    cancelledIds.add(id);
+    scheduled.remove(id);
+    payloads.remove(id);
+    displayed.remove(id);
+  }
 
   @override
   Future<void> cancelAll() async {
     cancelAllCalls++;
     scheduled.clear();
-    matchComponents.clear();
+    payloads.clear();
+    displayed.clear();
   }
 
   @override
@@ -33,7 +63,9 @@ class FakeNotificationsPlugin implements FlutterLocalNotificationsPlugin {
     String? payload,
     DateTimeComponents? matchDateTimeComponents,
   }) async {
+    scheduledIds.add(id);
     scheduled[id] = scheduledDate;
+    payloads[id] = payload;
     matchComponents[id] = matchDateTimeComponents;
   }
 
