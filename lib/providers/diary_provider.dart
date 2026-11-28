@@ -326,16 +326,9 @@ class DiaryNotifier extends Notifier<DiaryState> {
         final previous = <String>[];
         for (final entry in entries) {
           final key = 'diary_${entry.date}';
-          final json = await _storage.read(key: key);
-          if (json != null) {
-            try {
-              previous.add(PhotoStorage.toStoredName(
-                  (jsonDecode(json) as Map<String, dynamic>)['photo']
-                      as String));
-            } catch (_) {
-              // 前のエントリが壊れていても上書きは続ける（写真の削除だけ諦める）
-            }
-          }
+          // 前のエントリが壊れていても上書きは続ける（写真の削除だけ諦める）
+          final previousName = _photoNameOf(await _storage.read(key: key));
+          if (previousName != null) previous.add(previousName);
           await _storage.write(key: key, value: jsonEncode(entry.toJson()));
         }
         final newDates = {...stored.dates, ...entries.map((e) => e.date)};
