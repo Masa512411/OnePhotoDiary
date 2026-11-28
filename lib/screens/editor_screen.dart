@@ -175,7 +175,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     if (_isBusy) return;
     _isBusy = true;
     try {
-      final photo = await pickEntryPhoto(context);
+      final photo = await pickEntryPhoto(context, ref);
       if (photo == null || !mounted) return;
       setState(() {
         _photo = photo;

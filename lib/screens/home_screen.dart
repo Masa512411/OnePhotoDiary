@@ -47,7 +47,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   /// 記録の無い過去の日を、取り込んだ写真で記録する
   void _recordPastDay(String dateKey) async {
-    final photo = await pickEntryPhoto(context);
+    final photo = await pickEntryPhoto(context, ref);
     if (photo == null || !mounted) return;
     // 保存されなかった場合、取り込んだ写真は編集画面を閉じるときに削除される
     await Navigator.of(context).push(

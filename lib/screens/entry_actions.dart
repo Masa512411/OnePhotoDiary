@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../providers/diary_provider.dart';
+import '../providers/photo_provider.dart';
 import '../services/photo_import.dart';
 import 'editor_screen.dart';
 
@@ -96,7 +97,7 @@ Future<void> confirmAndDeleteEntry(
 
 /// 「カメラで撮る」「アルバムから選ぶ」を選ばせて写真を1枚取り込む
 /// 取り込み中は保存中のインジケーターを表示する。キャンセル・失敗時はnull
-Future<File?> pickEntryPhoto(BuildContext context) async {
+Future<File?> pickEntryPhoto(BuildContext context, WidgetRef ref) async {
   final source = await showModalBottomSheet<ImageSource>(
     context: context,
     builder: (context) => SafeArea(
@@ -121,7 +122,7 @@ Future<File?> pickEntryPhoto(BuildContext context) async {
 
   final String? path;
   try {
-    path = await PhotoImport.pick(source);
+    path = await PhotoImport.pick(ref.read(imagePickerProvider), source);
   } catch (e) {
     if (context.mounted) _showError(context, '写真の読み込みに失敗しました: $e');
     return null;
@@ -154,7 +155,7 @@ Future<File?> pickEntryPhoto(BuildContext context) async {
   );
   Navigator.of(context, rootNavigator: true).push(progress);
   try {
-    return await PhotoImport.save(path);
+    return await savePhotoToDocuments(path);
   } catch (e) {
     if (context.mounted) _showError(context, '写真の保存に失敗しました: $e');
     return null;
