@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:one_photo_diary/services/notification_service.dart';
 import 'package:timezone/data/latest_all.dart' as tz_data;
@@ -308,6 +309,85 @@ void main() {
       await service.refreshTimeZone();
 
       expect(tz.local.name, 'Asia/Tokyo');
+    });
+  });
+
+  group('NotificationService 通知のタップ', () {
+    NotificationResponse response(
+      String? payload, {
+      NotificationResponseType type =
+          NotificationResponseType.selectedNotification,
+    }) =>
+        NotificationResponse(notificationResponseType: type, payload: payload);
+
+    Future<NotificationService> initService() async {
+      final service = NotificationService(
+        plugin: plugin,
+        localTimezone: () async => 'Asia/Tokyo',
+      );
+      await service.init();
+      return service;
+    }
+
+    test('リマインダーのpayloadのタップだけを対象にする', () {
+      expect(
+        NotificationService.isReminderTap(response('reminder:21:0')),
+        isTrue,
+      );
+      expect(NotificationService.isReminderTap(response('other')), isFalse);
+      expect(NotificationService.isReminderTap(response(null)), isFalse);
+      expect(NotificationService.isReminderTap(null), isFalse);
+      expect(
+        NotificationService.isReminderTap(
+          response(
+            'reminder:21:0',
+            type: NotificationResponseType.selectedNotificationAction,
+          ),
+        ),
+        isFalse,
+      );
+    });
+
+    test('起動中のタップは遷移待ちになり、連続タップは1回にまとまる', () async {
+      final service = await initService();
+      expect(service.reminderTapPending.value, isFalse);
+
+      plugin.tap('reminder:21:0');
+      plugin.tap('reminder:21:0');
+
+      expect(service.reminderTapPending.value, isTrue);
+      expect(service.consumeReminderTap(), isTrue);
+      expect(service.consumeReminderTap(), isFalse);
+    });
+
+    test('リマインダー以外の通知のタップは無視する', () async {
+      final service = await initService();
+
+      plugin.tap('other');
+
+      expect(service.reminderTapPending.value, isFalse);
+    });
+
+    test('リマインダーのタップで起動した場合は初期化時に遷移待ちになる', () async {
+      plugin.launchDetails = NotificationAppLaunchDetails(
+        true,
+        notificationResponse: response('reminder:21:0'),
+      );
+
+      final service = await initService();
+
+      expect(service.reminderTapPending.value, isTrue);
+    });
+
+    test('通知以外で起動した場合は遷移待ちにしない', () async {
+      plugin.launchDetails = NotificationAppLaunchDetails(
+        false,
+        notificationResponse: response('reminder:21:0'),
+      );
+
+      final service = await initService();
+
+      expect(service.reminderTapPending.value, isFalse);
     });
   });
 }
