@@ -6,10 +6,53 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
+import 'package:image_picker/image_picker.dart';
 import 'package:one_photo_diary/providers/diary_provider.dart';
 import 'package:one_photo_diary/providers/photo_provider.dart';
 
 import 'helpers/fake_documents.dart';
+
+/// 呼び出し内容を記録し、指定したパスを返すImagePicker
+class FakeImagePicker extends ImagePicker {
+  FakeImagePicker(this.results);
+
+  /// 返す画像のパス
+  final List<String> results;
+
+  final calls = <String>[];
+  ImageSource? lastSource;
+  int? lastLimit;
+  bool? lastRequestFullMetadata;
+
+  @override
+  Future<XFile?> pickImage({
+    required ImageSource source,
+    double? maxWidth,
+    double? maxHeight,
+    int? imageQuality,
+    CameraDevice preferredCameraDevice = CameraDevice.rear,
+    bool requestFullMetadata = true,
+  }) async {
+    calls.add('pickImage');
+    lastSource = source;
+    lastRequestFullMetadata = requestFullMetadata;
+    return results.isEmpty ? null : XFile(results.first);
+  }
+
+  @override
+  Future<List<XFile>> pickMultiImage({
+    double? maxWidth,
+    double? maxHeight,
+    int? imageQuality,
+    int? limit,
+    bool requestFullMetadata = true,
+  }) async {
+    calls.add('pickMultiImage');
+    lastLimit = limit;
+    lastRequestFullMetadata = requestFullMetadata;
+    return results.map(XFile.new).toList();
+  }
+}
 
 String _dateKey(DateTime d) => d.toIso8601String().substring(0, 10);
 
@@ -284,6 +327,136 @@ void main() {
         addedName,
       ]);
     });
+  });
+
+  group('PhotoNotifier.pickPhoto', () {
+    late FakeImagePicker picker;
+
+    /// [existing]枚の撮影済み写真がある状態のPhotoNotifierを作る
+    Future<PhotoNotifier> notifierWith(
+      List<String> results, {
+      int existing = 0,
+    }) async {
+      final documents = setUpFakeDocumentsDirectory();
+      final names = [for (var i = 0; i < existing; i++) 'p$i.jpg'];
+      for (final name in names) {
+        createPhoto(documents, name);
+      }
+      FlutterSecureStorage.setMockInitialValues({
+        'pending_photos': jsonEncode([
+          for (final name in names) {'name': name, 'date': today},
+        ]),
+      });
+      picker = FakeImagePicker(results);
+      container = ProviderContainer(
+        overrides: [imagePickerProvider.overrideWithValue(picker)],
+      );
+      addTearDown(container.dispose);
+      return loadNotifier();
+    }
+
+    test('カメラは1枚撮影する', () async {
+      final notifier = await notifierWith(['/tmp/camera.jpg']);
+
+      final result = await notifier.pickPhoto();
+
+      expect(picker.calls, ['pickImage']);
+      expect(picker.lastSource, ImageSource.camera);
+      expect(result.paths, ['/tmp/camera.jpg']);
+      expect(result.skipped, 0);
+    });
+
+    test('アルバムからは残り枠ぶんを上限に複数選べる', () async {
+      final notifier = await notifierWith(['/tmp/a.jpg', '/tmp/b.jpg']);
+
+      final result = await notifier.pickPhoto(source: ImageSource.gallery);
+
+      expect(picker.calls, ['pickMultiImage']);
+      expect(picker.lastLimit, PhotoNotifier.maxPhotos);
+      // 写真ライブラリの権限を求めないよう、メタデータは要求しない
+      expect(picker.lastRequestFullMetadata, isFalse);
+      expect(result.paths, ['/tmp/a.jpg', '/tmp/b.jpg']);
+      expect(result.skipped, 0);
+    });
+
+    test('残り枠が1枚のときはアルバムから1枚だけ選ぶ', () async {
+      // pickMultiImageのlimitは2以上でないと指定できないため
+      final notifier = await notifierWith(['/tmp/a.jpg'], existing: 2);
+
+      final result = await notifier.pickPhoto(source: ImageSource.gallery);
+
+      expect(picker.calls, ['pickImage']);
+      expect(picker.lastSource, ImageSource.gallery);
+      expect(result.paths, ['/tmp/a.jpg']);
+    });
+
+    test('残り枠を超えて選ばれた分は取り込まず、枚数を返す', () async {
+      // limitを無視する端末で多く選ばれた場合
+      final notifier = await notifierWith([
+        '/tmp/a.jpg',
+        '/tmp/b.jpg',
+        '/tmp/c.jpg',
+      ], existing: 1);
+
+      final result = await notifier.pickPhoto(source: ImageSource.gallery);
+
+      expect(picker.lastLimit, 2);
+      expect(result.paths, ['/tmp/a.jpg', '/tmp/b.jpg']);
+      expect(result.skipped, 1);
+    });
+
+    test('上限に達していれば取得元を開かない', () async {
+      final notifier = await notifierWith([
+        '/tmp/a.jpg',
+      ], existing: PhotoNotifier.maxPhotos);
+
+      final result = await notifier.pickPhoto(source: ImageSource.gallery);
+
+      expect(picker.calls, isEmpty);
+      expect(result.paths, isEmpty);
+      expect(result.skipped, 0);
+    });
+
+    test('キャンセル時は空の結果を返す', () async {
+      final notifier = await notifierWith([]);
+
+      expect(
+        (await notifier.pickPhoto(source: ImageSource.gallery)).paths,
+        isEmpty,
+      );
+      expect((await notifier.pickPhoto()).paths, isEmpty);
+    });
+  });
+
+  test('アルバムから選んだ写真も今日の日付で記録される', () async {
+    final documents = setUpFakeDocumentsDirectory();
+    FlutterSecureStorage.setMockInitialValues({});
+    final now = DateTime(2026, 11, 28, 10);
+    // アルバムの写真は撮影日が過去でも、今日の候補として扱う
+    final source = File('${documents.parent.path}/album_source.jpg')
+      ..writeAsBytesSync(img.encodeJpg(img.Image(width: 1, height: 1)))
+      ..setLastModifiedSync(DateTime(2020, 1, 1));
+    addTearDown(() {
+      if (source.existsSync()) source.deleteSync();
+    });
+    final picker = FakeImagePicker([source.path]);
+    final c = ProviderContainer(
+      overrides: [
+        clockProvider.overrideWithValue(() => now),
+        imagePickerProvider.overrideWithValue(picker),
+      ],
+    );
+    addTearDown(c.dispose);
+    final notifier = c.read(pendingPhotosProvider.notifier);
+    await notifier.reload();
+
+    final picked = await notifier.pickPhoto(source: ImageSource.gallery);
+    final saved = await notifier.addPhoto(picked.paths.single);
+
+    expect(c.read(pendingPhotosProvider).map((f) => f.path), [saved!.path]);
+    expect(await storedPending(), [
+      {'name': saved.uri.pathSegments.last, 'date': '2026-11-28'},
+    ]);
   });
 
   group('processCapturedImage', () {
