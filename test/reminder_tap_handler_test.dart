@@ -13,6 +13,7 @@ import 'package:one_photo_diary/providers/photo_provider.dart';
 import 'package:one_photo_diary/providers/reminder_provider.dart';
 import 'package:one_photo_diary/screens/app_lock_gate.dart';
 import 'package:one_photo_diary/screens/camera_screen.dart';
+import 'package:one_photo_diary/screens/selection_screen.dart';
 import 'package:one_photo_diary/services/notification_service.dart';
 
 import 'helpers/fake_local_auth.dart';
@@ -242,9 +243,44 @@ void main() {
     expect(notifications.reminderTapPending.value, isFalse);
   });
 
-  testWidgets('ホーム以外の画面を開いている間は割り込まない', (tester) async {
+  testWidgets('撮影フロー以外の画面を開いていても撮影画面を開く', (tester) async {
     await pumpApp(tester);
+    // 設定画面でリマインダーを設定してそのまま離脱した場合など
     await tester.tap(find.text('ホーム'));
+    await tester.pumpAndSettle();
+
+    plugin.tap('reminder:21:0');
+    await tester.pumpAndSettle();
+
+    expect(camera, findsOneWidget);
+  });
+
+  testWidgets('撮影画面を開いている間は重ねて開かない', (tester) async {
+    await pumpApp(tester);
+    // ホームの撮影ボタンから開いた場合と同じ状態
+    Navigator.of(
+      tester.element(find.text('ホーム')),
+    ).push(MaterialPageRoute(builder: (_) => const CameraScreen()));
+    await tester.pumpAndSettle();
+
+    plugin.tap('reminder:21:0');
+    await tester.pumpAndSettle();
+
+    expect(camera, findsOneWidget);
+    // 後で撮影画面を閉じたときに突然開かないよう、タップは破棄する
+    expect(notifications.reminderTapPending.value, isFalse);
+  });
+
+  testWidgets('選択・編集の画面が下に残っている間も重ねて開かない', (tester) async {
+    await pumpApp(tester);
+    final navigator = Navigator.of(tester.element(find.text('ホーム')));
+    navigator.push(
+      MaterialPageRoute(builder: (_) => const SelectionScreen(photos: [])),
+    );
+    await tester.pumpAndSettle();
+    navigator.push(
+      MaterialPageRoute(builder: (_) => const Scaffold(body: Text('詳細画面'))),
+    );
     await tester.pumpAndSettle();
 
     plugin.tap('reminder:21:0');
@@ -252,8 +288,6 @@ void main() {
 
     expect(find.text('詳細画面'), findsOneWidget);
     expect(camera, findsNothing);
-    // 後でホームに戻ったときに突然開かないよう、タップは破棄する
-    expect(notifications.reminderTapPending.value, isFalse);
   });
 
   testWidgets('今日が記録済みなら撮影画面へは進まず、ホームで今日を選択する', (tester) async {

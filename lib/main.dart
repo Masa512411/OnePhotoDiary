@@ -8,7 +8,9 @@ import 'providers/photo_provider.dart';
 import 'providers/reminder_provider.dart';
 import 'screens/app_lock_gate.dart';
 import 'screens/camera_screen.dart';
+import 'screens/editor_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/selection_screen.dart';
 import 'services/backup_service.dart';
 import 'services/install_guard.dart';
 import 'services/notification_service.dart';
@@ -149,12 +151,13 @@ class _ReminderTapHandlerState extends ConsumerState<ReminderTapHandler> {
       if (!_notifications.consumeReminderTap()) return;
 
       final navigator = widget.navigatorKey.currentState!;
-      // 撮影・編集など他の画面を開いている間は割り込まない
-      // （閉じると取り込んだ写真を削除する画面もあるため、ホームへ戻すこともしない）
-      if (navigator.canPop()) return;
+      // 撮影から保存までの画面を開いている間は重ねて開かない（連続タップも含む）
+      // （閉じると取り込んだ写真を削除する画面もあるため、閉じて開き直すこともしない）
+      if (_isRecordingFlowOpen(navigator)) return;
 
       if (recorded) {
-        // 今日は記録済みなので撮影画面へは進まず、ホームで今日の記録を表示する
+        // 今日は記録済みなので撮影画面へは進まず、今日の記録を表示する
+        // （ホーム以外の画面を開いている場合は、戻ったときに今日が選ばれている）
         final now = DateTime.now();
         ref.read(calendarProvider.notifier).selectDay(now, now);
         return;
@@ -168,6 +171,26 @@ class _ReminderTapHandlerState extends ConsumerState<ReminderTapHandler> {
     await cameraClosed;
     // ホームの撮影ボタンから開いたときと同じく、撮影済み写真を読み込み直す
     if (mounted) ref.read(pendingPhotosProvider.notifier).reload();
+  }
+
+  /// 撮影・選択・編集の画面が画面スタックにあるか
+  /// 下に隠れた画面も状態を保ったまま木に残っているので、要素をたどって探す
+  static bool _isRecordingFlowOpen(NavigatorState navigator) {
+    var found = false;
+    void visit(Element element) {
+      if (found) return;
+      final widget = element.widget;
+      if (widget is CameraScreen ||
+          widget is SelectionScreen ||
+          widget is EditorScreen) {
+        found = true;
+        return;
+      }
+      element.visitChildElements(visit);
+    }
+
+    navigator.context.visitChildElements(visit);
+    return found;
   }
 
   @override
