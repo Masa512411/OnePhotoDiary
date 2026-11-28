@@ -199,7 +199,6 @@ const int maxPhotoDimension = 2048;
 /// 撮影画像を保存用のJPEGに変換する（[compute]で別isolateから呼ばれる）
 /// 向き（EXIF Orientation）を画素に焼き込んでから、位置情報などのEXIFをすべて除去する。
 /// 長辺が[maxPhotoDimension]を超える場合は縮小する。
-@visibleForTesting
 Uint8List processCapturedImage(Uint8List rawBytes) {
   final decoded = img.decodeImage(rawBytes);
   if (decoded == null) throw Exception('画像のデコードに失敗しました');
