@@ -1,12 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:one_photo_diary/providers/diary_provider.dart';
 import 'package:one_photo_diary/providers/photo_provider.dart';
 import 'package:one_photo_diary/screens/editor_screen.dart';
+
+import 'helpers/fake_secure_storage.dart';
 
 /// ストレージに触れず、保存呼び出し回数を記録するDiaryNotifier
 class FakeDiaryNotifier extends DiaryNotifier {
@@ -21,10 +25,19 @@ class FakeDiaryNotifier extends DiaryNotifier {
   /// trueなら保存処理で例外を投げる
   bool failSave = false;
 
+  /// trueなら保存済みかの確認で例外を投げる
+  bool failCheck = false;
+
   @override
   DiaryState build() {
     final today = DateTime.now().toIso8601String().substring(0, 10);
     return DiaryState(datesWithEntries: hasTodayEntry ? {today} : {});
+  }
+
+  @override
+  Future<bool> hasEntryToday() async {
+    if (failCheck) throw Exception('確認失敗');
+    return hasTodayEntry;
   }
 
   @override
@@ -57,6 +70,7 @@ void main() {
   Future<void> pumpEditor(
     WidgetTester tester, {
     bool hasTodayEntry = false,
+    List<Override>? diaryOverrides,
   }) async {
     // 保存ボタンまで画面内に収まるよう縦長の画面サイズにする
     tester.view.physicalSize = const Size(1080, 2400);
@@ -68,7 +82,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          diaryProvider.overrideWith(() => diary),
+          ...diaryOverrides ?? [diaryProvider.overrideWith(() => diary)],
           pendingPhotosProvider.overrideWith(() => photos),
         ],
         child: MaterialApp(
@@ -250,5 +264,44 @@ void main() {
     expect(find.text('日記の保存に失敗しました'), findsNothing);
     expect(find.text('日記を保存しました！'), findsOneWidget);
     expect(find.byType(EditorScreen), findsNothing);
+  });
+
+  testWidgets('保存済みかの確認に失敗したら保存せずボタンを再度有効にする', (tester) async {
+    await pumpEditor(tester);
+    diary.failCheck = true;
+
+    await tester.tap(saveButton());
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(diary.saveCount, 0);
+    expect(find.text('日記の保存に失敗しました'), findsOneWidget);
+    expect(find.byType(EditorScreen), findsOneWidget);
+    expect(tester.widget<ElevatedButton>(saveButton()).onPressed, isNotNull);
+  });
+
+  testWidgets('日付一覧を読めなくてもストレージに今日の日記があれば上書き確認する', (tester) async {
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    FlutterSecureStorage.setMockInitialValues({
+      'diary_$today': jsonEncode({
+        'photo': 'old.jpg',
+        'caption': '',
+        'date': today,
+      }),
+    });
+    final storage = FakeSecureStorage()..failRead('diary_dates');
+    await pumpEditor(
+      tester,
+      diaryOverrides: [diaryStorageProvider.overrideWithValue(storage)],
+    );
+
+    await tester.tap(saveButton());
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.tap(find.text('キャンセル'));
+    await tester.pumpAndSettle();
+    expect(storage.writtenKeys, isEmpty);
+    expect(find.byType(EditorScreen), findsOneWidget);
   });
 }

@@ -1,0 +1,70 @@
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+/// 読み書きの失敗を再現できるFlutterSecureStorage
+/// データ自体は FlutterSecureStorage.setMockInitialValues のモックに保存される
+class FakeSecureStorage extends FlutterSecureStorage {
+  FakeSecureStorage()
+      : super(aOptions: const AndroidOptions(encryptedSharedPreferences: true));
+
+  /// キーごとに、読み込みで例外を投げる残り回数（-1なら常に投げる）
+  final Map<String, int> readFailures = {};
+
+  /// trueならreadAllで例外を投げる
+  bool failReadAll = false;
+
+  /// 書き込みで例外を投げるキー
+  final Set<String> writeFailures = {};
+
+  /// 書き込んだキーの記録（失敗した書き込みは含まない）
+  final List<String> writtenKeys = [];
+
+  /// [key]の読み込みを[times]回失敗させる（省略時は常に失敗）
+  void failRead(String key, {int times = -1}) => readFailures[key] = times;
+
+  @override
+  Future<String?> read({
+    required String key,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    final remaining = readFailures[key];
+    if (remaining != null && remaining != 0) {
+      if (remaining > 0) readFailures[key] = remaining - 1;
+      throw Exception('読み込み失敗: $key');
+    }
+    return super.read(key: key);
+  }
+
+  @override
+  Future<Map<String, String>> readAll({
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    if (failReadAll) throw Exception('全件読み込み失敗');
+    return super.readAll();
+  }
+
+  @override
+  Future<void> write({
+    required String key,
+    required String? value,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    if (writeFailures.contains(key)) throw Exception('書き込み失敗: $key');
+    writtenKeys.add(key);
+    return super.write(key: key, value: value);
+  }
+}
