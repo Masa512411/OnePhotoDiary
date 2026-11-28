@@ -1,11 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
+
 import '../services/photo_storage.dart';
 import 'diary_provider.dart';
 
@@ -107,64 +110,82 @@ class PhotoNotifier extends Notifier<List<File>> {
   Future<void> reload() =>
       _serialized(() => _loadFromStorage(discardStale: false));
 
-  /// カメラで写真を撮影して追加する（EXIFデータを除去して保存）
-  Future<bool> takePhoto() async {
-    if (state.length >= maxPhotos) return false;
+  /// カメラで写真を撮影し、撮影した画像のパスを返す（キャンセル・上限時はnull）
+  /// 保存は時間がかかるため、呼び出し側で保存中の表示をしてから[addPhoto]を呼ぶ
+  Future<String?> pickPhoto() async {
+    if (state.length >= maxPhotos) return null;
 
-    final picker = ImagePicker();
-    try {
-      final XFile? photo = await picker.pickImage(source: ImageSource.camera);
-      if (photo != null) {
-        return await addPhoto(photo.path) != null;
-      }
-    } catch (e) {
-      rethrow;
-    }
-    return false;
+    final XFile? photo = await ImagePicker().pickImage(
+      source: ImageSource.camera,
+      // 保存時の変換処理を軽くするため、カメラ側であらかじめ縮小する
+      maxWidth: maxPhotoDimension.toDouble(),
+      maxHeight: maxPhotoDimension.toDouble(),
+      imageQuality: 90,
+    );
+    return photo?.path;
   }
 
   /// 撮影した画像をEXIFなしでDocumentsに保存し、撮影済み写真に追加する
   /// 上限に達している場合はnullを返す
-  @visibleForTesting
   Future<File?> addPhoto(String sourcePath) => _serialized(() async {
-        if (state.length >= maxPhotos) return null;
+    if (state.length >= maxPhotos) return null;
 
-        // ファイル名で写真を識別・削除するため、衝突しないUUIDで命名する
-        final directory = await PhotoStorage.documentsDirectory();
-        final fileName = '${const Uuid().v4()}.jpg';
-        final destPath = PhotoStorage.resolve(fileName, directory).path;
+    // ファイル名で写真を識別・削除するため、衝突しないUUIDで命名する
+    final directory = await PhotoStorage.documentsDirectory();
+    final fileName = '${const Uuid().v4()}.jpg';
+    final destPath = PhotoStorage.resolve(fileName, directory).path;
 
-        final rawBytes = await File(sourcePath).readAsBytes();
-        final decoded = img.decodeImage(rawBytes);
-        if (decoded == null) throw Exception('画像のデコードに失敗しました');
+    final rawBytes = await File(sourcePath).readAsBytes();
+    // デコード・エンコードは重いため、UIを止めないよう別isolateで行う
+    final cleanBytes = await compute(processCapturedImage, rawBytes);
+    final savedImage = await File(destPath).writeAsBytes(cleanBytes);
 
-        // EXIFなしでJPEGとして再エンコード
-        final cleanBytes = img.encodeJpg(decoded, quality: 95);
-        final savedImage = await File(destPath).writeAsBytes(cleanBytes);
-
-        _captureDates[fileName] = _todayKey();
-        state = [...state, savedImage];
-        await _saveToStorage();
-        return savedImage;
-      });
+    _captureDates[fileName] = _todayKey();
+    state = [...state, savedImage];
+    await _saveToStorage();
+    return savedImage;
+  });
 
   /// 保存完了後に写真をクリアする
   /// 選ばれなかった写真のファイルも削除する。日記エントリの保存後に呼ばれるため、
   /// 選ばれた写真は保存済みエントリから参照されており削除対象にならない。
   Future<void> clear() => _serialized(() async {
-        final documents = await PhotoStorage.documentsDirectory();
-        final photos = [
-          ...state,
-          for (final name in await loadPendingPhotoNames())
-            PhotoStorage.resolve(name, documents),
-        ];
+    final documents = await PhotoStorage.documentsDirectory();
+    final photos = [
+      ...state,
+      for (final name in await loadPendingPhotoNames())
+        PhotoStorage.resolve(name, documents),
+    ];
 
-        await _storage.delete(key: _storageKey);
-        _captureDates.clear();
-        state = [];
+    await _storage.delete(key: _storageKey);
+    _captureDates.clear();
+    state = [];
 
-        await deletePhotosIfUnreferenced(photos);
-      });
+    await deletePhotosIfUnreferenced(photos);
+  });
+}
+
+/// 保存する写真の長辺の最大ピクセル数
+const int maxPhotoDimension = 2048;
+
+/// 撮影画像を保存用のJPEGに変換する（[compute]で別isolateから呼ばれる）
+/// 向き（EXIF Orientation）を画素に焼き込んでから、位置情報などのEXIFをすべて除去する。
+/// 長辺が[maxPhotoDimension]を超える場合は縮小する。
+@visibleForTesting
+Uint8List processCapturedImage(Uint8List rawBytes) {
+  final decoded = img.decodeImage(rawBytes);
+  if (decoded == null) throw Exception('画像のデコードに失敗しました');
+
+  var image = img.bakeOrientation(decoded);
+  if (max(image.width, image.height) > maxPhotoDimension) {
+    image = image.width >= image.height
+        ? img.copyResize(image, width: maxPhotoDimension)
+        : img.copyResize(image, height: maxPhotoDimension);
+  }
+
+  // encodeJpgは画像が持つEXIFをそのまま書き出すため、空にしてから保存する
+  image.exif = img.ExifData();
+  return img.encodeJpg(image, quality: 90);
 }
 
 /// 現在時刻のProvider（テストで日付の変わり目を再現できるよう差し替え可能にする）
@@ -181,7 +202,8 @@ Future<List<String>> loadPendingPhotoNames() async {
   return [
     for (final item in jsonDecode(json) as List)
       PhotoStorage.toStoredName(
-          item is Map ? item['name'] as String : item as String),
+        item is Map ? item['name'] as String : item as String,
+      ),
   ];
 }
 
