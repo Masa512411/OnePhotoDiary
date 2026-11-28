@@ -9,6 +9,8 @@ import '../providers/diary_provider.dart';
 import '../providers/photo_provider.dart';
 import '../providers/calendar_provider.dart';
 import 'camera_screen.dart';
+import 'editor_screen.dart';
+import 'entry_actions.dart';
 import 'gallery_screen.dart';
 import 'selection_screen.dart';
 import 'settings_screen.dart';
@@ -41,6 +43,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
     );
     ref.read(pendingPhotosProvider.notifier).reload();
+  }
+
+  /// 記録の無い過去の日を、取り込んだ写真で記録する
+  void _recordPastDay(String dateKey) async {
+    final photo = await pickEntryPhoto(context, ref);
+    if (photo == null || !mounted) return;
+    // 保存されなかった場合、取り込んだ写真は編集画面を閉じるときに削除される
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => EditorScreen(
+          selectedPhoto: photo,
+          date: dateKey,
+          photoIsImported: true,
+        ),
+      ),
+    );
   }
 
   void _openSelection(List<File> photos) async {
@@ -196,7 +214,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           Expanded(
             child: calendarState.selectedDay != null && events.isNotEmpty
                 ? _buildPhotoDetail(calendarState.selectedDay!)
-                : _buildEmptyState(),
+                : _buildEmptyState(calendarState.selectedDay),
           ),
         ],
       ),
@@ -213,21 +231,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final entryAsync = ref.watch(diaryEntryProvider(dateKey));
     return entryAsync.when(
       data: (entry) {
-        if (entry == null) return _buildEmptyState();
+        if (entry == null) return _buildEmptyState(selectedDay);
         return SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                DateFormat('yyyy年MM月dd日 (E)', 'ja_JP').format(selectedDay),
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black54,
-                ),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      DateFormat('yyyy年MM月dd日 (E)', 'ja_JP')
+                          .format(selectedDay),
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black54,
+                      ),
+                    ),
+                  ),
+                  EntryActionsMenu(entry: entry, color: Colors.black54),
+                ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
               ClipRRect(
                 borderRadius: BorderRadius.circular(12),
                 child: Image.file(
@@ -259,7 +285,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         );
       },
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, st) => _buildEmptyState(),
+      error: (e, st) => _buildEmptyState(selectedDay),
     );
   }
 
@@ -312,7 +338,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
-  Widget _buildEmptyState() {
+  /// 記録が無い日の表示
+  /// 今日は撮影、過去の日はその日の記録ができる。未来の日は記録できない
+  Widget _buildEmptyState(DateTime? selectedDay) {
+    final todayKey = DateTime.now().toIso8601String().substring(0, 10);
+    final dateKey = selectedDay?.toIso8601String().substring(0, 10) ?? todayKey;
+    // カレンダーの日付はUTCの0時で渡されるため、時刻ではなく日付の文字列で比べる
+    final order = dateKey.compareTo(todayKey);
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -324,10 +356,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             style: TextStyle(color: Colors.grey[500]),
           ),
           const SizedBox(height: 8),
-          TextButton(
-            onPressed: _openCamera,
-            child: const Text('写真を撮る'),
-          ),
+          if (order == 0)
+            TextButton(
+              onPressed: _openCamera,
+              child: const Text('写真を撮る'),
+            )
+          else if (order < 0)
+            TextButton(
+              onPressed: () => _recordPastDay(dateKey),
+              child: const Text('この日を記録する'),
+            ),
         ],
       ),
     );

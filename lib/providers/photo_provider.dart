@@ -158,17 +158,9 @@ class PhotoNotifier extends Notifier<List<File>> {
   Future<File?> addPhoto(String sourcePath) => _serialized(() async {
     if (state.length >= maxPhotos) return null;
 
-    // ファイル名で写真を識別・削除するため、衝突しないUUIDで命名する
-    final directory = await PhotoStorage.documentsDirectory();
-    final fileName = '${const Uuid().v4()}.jpg';
-    final destPath = PhotoStorage.resolve(fileName, directory).path;
+    final savedImage = await savePhotoToDocuments(sourcePath);
 
-    final rawBytes = await File(sourcePath).readAsBytes();
-    // デコード・エンコードは重いため、UIを止めないよう別isolateで行う
-    final cleanBytes = await compute(processCapturedImage, rawBytes);
-    final savedImage = await File(destPath).writeAsBytes(cleanBytes);
-
-    _captureDates[fileName] = _todayKey();
+    _captureDates[PhotoStorage.toStoredName(savedImage.path)] = _todayKey();
     state = [...state, savedImage];
     await _saveToStorage();
     return savedImage;
@@ -213,6 +205,20 @@ Uint8List processCapturedImage(Uint8List rawBytes) {
   // encodeJpgは画像が持つEXIFをそのまま書き出すため、空にしてから保存する
   image.exif = img.ExifData();
   return img.encodeJpg(image, quality: 90);
+}
+
+/// 画像をEXIFなし・縮小済みのJPEGに変換し、DocumentsにUUID.jpgで保存する
+/// （撮影済み写真の追加と、編集・過去日の記録用の取り込みで共通に使う）
+Future<File> savePhotoToDocuments(String sourcePath) async {
+  // ファイル名で写真を識別・削除するため、衝突しないUUIDで命名する
+  final directory = await PhotoStorage.documentsDirectory();
+  final fileName = '${const Uuid().v4()}.jpg';
+  final destPath = PhotoStorage.resolve(fileName, directory).path;
+
+  final rawBytes = await File(sourcePath).readAsBytes();
+  // デコード・エンコードは重いため、UIを止めないよう別isolateで行う
+  final cleanBytes = await compute(processCapturedImage, rawBytes);
+  return File(destPath).writeAsBytes(cleanBytes);
 }
 
 /// 写真の取得に使うImagePickerのProvider（テストで差し替え可能にする）
