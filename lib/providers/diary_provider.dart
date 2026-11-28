@@ -273,6 +273,52 @@ class DiaryNotifier extends Notifier<DiaryState> {
       // 削除できなくても保存自体は完了しているため無視する
     }
   }
+
+  /// バックアップから復元したエントリをまとめて保存する
+  /// 同じ日付のエントリは上書きし、使われなくなった写真は削除する
+  /// 途中で失敗した場合は例外を投げ、日付一覧を読み直す
+  /// （書き込み済みのエントリはキーから復元されるため一覧から漏れない）
+  Future<void> importEntries(List<DiaryEntry> entries) async {
+    final List<String> previousNames;
+    try {
+      previousNames = await _withDatesLock(() async {
+        final stored = await _readStoredDates(_storage);
+        final previous = <String>[];
+        for (final entry in entries) {
+          final key = 'diary_${entry.date}';
+          final json = await _storage.read(key: key);
+          if (json != null) {
+            try {
+              previous.add(PhotoStorage.toStoredName(
+                  (jsonDecode(json) as Map<String, dynamic>)['photo']
+                      as String));
+            } catch (_) {
+              // 前のエントリが壊れていても上書きは続ける（写真の削除だけ諦める）
+            }
+          }
+          await _storage.write(key: key, value: jsonEncode(entry.toJson()));
+        }
+        final newDates = {...stored.dates, ...entries.map((e) => e.date)};
+        await _storage.write(
+            key: _diaryDatesKey, value: jsonEncode(newDates.toList()));
+        state = state.copyWith(
+          datesWithEntries: {...newDates, ...state.datesWithEntries},
+        );
+        _loadFailed = !stored.recovered;
+        return previous;
+      });
+    } catch (_) {
+      await _loadDates();
+      rethrow;
+    }
+
+    final newNames = {
+      for (final entry in entries) PhotoStorage.toStoredName(entry.photo.path),
+    };
+    for (final name in previousNames) {
+      if (!newNames.contains(name)) await _deleteReplacedPhoto(name);
+    }
+  }
 }
 
 final diaryProvider = NotifierProvider<DiaryNotifier, DiaryState>(
