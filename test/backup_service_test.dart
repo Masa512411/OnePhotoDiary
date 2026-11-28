@@ -23,6 +23,10 @@ String _entryJson(String date, String photo, String caption) =>
 
 String _dateKey(DateTime d) => d.toIso8601String().substring(0, 10);
 
+/// 元に戻すことに成功した場合の失敗（元に戻せなかった例外ではない）
+final _throwsRolledBack = throwsA(
+    allOf(isException, isNot(isA<DiaryImportRollbackException>())));
+
 /// 削除の失敗も再現できるストレージ（復元の取り消しの失敗を再現するため）
 class _FailingDeleteStorage extends FakeSecureStorage {
   final Set<String> deleteFailures = {};
@@ -331,6 +335,21 @@ void main() {
       expect((error as BackupFormatException).message, contains('大きすぎる'));
     });
 
+    test('圧縮で小さくなっていても、展開後サイズで上限を確認する', () async {
+      final zip = writeZip(
+        manifestOf([
+          {'date': '2026-11-26', 'caption': '', 'photo': 'photos/a.jpg'},
+        ]),
+        photos: {'photos/a.jpg': List.filled(1024 * 1024, 0)},
+      );
+      expect(zip.lengthSync(), lessThan(100 * 1024));
+
+      final error = await readError(zip, maxPhotoBytes: 100 * 1024);
+
+      expect(error, isA<BackupFormatException>());
+      expect((error as BackupFormatException).message, contains('大きすぎる'));
+    });
+
     test('不正な日付・写真のパス・重複した日付は受け付けない', () async {
       Future<Object?> errorFor(List<Map<String, dynamic>> entries) =>
           readError(writeZip(manifestOf(entries), photos: {
@@ -545,7 +564,7 @@ void main() {
       storage.writeFailures.add('diary_2026-11-27');
 
       await expectLater(
-          restore(await readTwoEntries(), notifier), throwsException);
+          restore(await readTwoEntries(), notifier), _throwsRolledBack);
       await pumpEventQueue();
 
       // 書き込み済みだった1件目も取り消され、復元した写真はすべて削除される
@@ -563,10 +582,10 @@ void main() {
         'diary_2026-11-26': original,
       });
       final notifier = await loadNotifier();
-      storage.writeFailures.add('diary_dates');
+      storage.writeFailures.add('diary_2026-11-27');
 
       await expectLater(
-          restore(await readTwoEntries(), notifier), throwsException);
+          restore(await readTwoEntries(), notifier), _throwsRolledBack);
       await pumpEventQueue();
 
       expect(await storage.read(key: 'diary_2026-11-26'), original);
