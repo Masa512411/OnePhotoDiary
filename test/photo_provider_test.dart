@@ -285,4 +285,78 @@ void main() {
       ]);
     });
   });
+
+  group('processCapturedImage', () {
+    /// 向きと位置情報のEXIFを持つJPEGを作成する
+    Uint8List jpegWithExif({required int width, required int height}) {
+      final image = img.Image(width: width, height: height);
+      // 左上だけ赤くして、回転後の位置を確認できるようにする
+      image.setPixelRgb(0, 0, 255, 0, 0);
+      image.exif.imageIfd.orientation = 6; // 時計回りに90度回転して表示
+      image.exif.gpsIfd['GPSLatitudeRef'] = img.IfdValueAscii('N');
+      image.exif.gpsIfd['GPSLatitude'] = img.IfdValueRational(35, 1);
+      return img.encodeJpg(image);
+    }
+
+    test('EXIFを除去し、向きを画素に焼き込む', () {
+      final raw = jpegWithExif(width: 40, height: 20);
+      expect(
+        img.decodeJpg(raw)!.exif.gpsIfd.isEmpty,
+        isFalse,
+        reason: '入力には位置情報がある',
+      );
+
+      final result = processCapturedImage(raw);
+      final decoded = img.decodeJpg(result)!;
+
+      expect(decoded.exif.isEmpty, isTrue);
+      expect(String.fromCharCodes(result).contains('Exif'), isFalse);
+      // 90度回転して縦長になり、左上の赤は右上に移る
+      expect([decoded.width, decoded.height], [20, 40]);
+      expect(decoded.getPixel(19, 0).r, greaterThan(150));
+      expect(decoded.getPixel(0, 0).r, lessThan(100));
+    });
+
+    test('長辺が上限を超える画像は縦横比を保って縮小する', () {
+      final raw = img.encodeJpg(
+        img.Image(width: maxPhotoDimension * 2, height: maxPhotoDimension),
+      );
+
+      final decoded = img.decodeJpg(processCapturedImage(raw))!;
+
+      expect(
+        [decoded.width, decoded.height],
+        [maxPhotoDimension, maxPhotoDimension ~/ 2],
+      );
+    });
+
+    test('上限以下の画像は縮小しない', () {
+      final raw = img.encodeJpg(img.Image(width: 300, height: 200));
+
+      final decoded = img.decodeJpg(processCapturedImage(raw))!;
+
+      expect([decoded.width, decoded.height], [300, 200]);
+    });
+  });
+
+  test('addPhotoで保存した写真にはEXIFが残らない', () async {
+    final documents = setUpFakeDocumentsDirectory();
+    FlutterSecureStorage.setMockInitialValues({});
+    final image = img.Image(width: 40, height: 20);
+    image.exif.imageIfd.orientation = 6;
+    image.exif.gpsIfd['GPSLatitudeRef'] = img.IfdValueAscii('N');
+    final source = File('${documents.parent.path}/exif_source.jpg')
+      ..writeAsBytesSync(img.encodeJpg(image));
+    addTearDown(() {
+      if (source.existsSync()) source.deleteSync();
+    });
+
+    final saved = await container
+        .read(pendingPhotosProvider.notifier)
+        .addPhoto(source.path);
+
+    final decoded = img.decodeJpg(saved!.readAsBytesSync())!;
+    expect(decoded.exif.isEmpty, isTrue);
+    expect([decoded.width, decoded.height], [20, 40]);
+  });
 }
