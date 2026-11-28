@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:table_calendar/table_calendar.dart';
@@ -20,6 +21,9 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
+  static const double _daysOfWeekFontSize = 14.0;
+  static const double _dayFontSize = 16.0;
+
   @override
   void initState() {
     super.initState();
@@ -53,6 +57,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final pendingPhotos = ref.watch(pendingPhotosProvider);
     final calendarState = ref.watch(calendarProvider);
     final diaryState = ref.watch(diaryProvider);
+    // 日本語フォントは行の高さが大きく、端末の文字サイズ設定でも拡大されるため、
+    // TableCalendar の固定値(曜日行 16 / 日付行 52)では文字の下側が見切れる。
+    // 実際の文字サイズから高さを算出する。
+    final textScaler = MediaQuery.textScalerOf(context);
+    final daysOfWeekHeight = textScaler.scale(_daysOfWeekFontSize) * 1.6;
+    final rowHeight = max(52.0, textScaler.scale(_dayFontSize) * 1.6 + 12.0);
 
     final events = calendarState.selectedDay != null
         ? _getEventsForDay(calendarState.selectedDay!, diaryState)
@@ -135,6 +145,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             onPageChanged: (focusedDay) {
               ref.read(calendarProvider.notifier).changePage(focusedDay);
             },
+            daysOfWeekHeight: daysOfWeekHeight,
+            rowHeight: rowHeight,
+            daysOfWeekStyle: const DaysOfWeekStyle(
+              weekdayStyle: TextStyle(
+                fontSize: _daysOfWeekFontSize,
+                color: Color(0xFF4F4F4F),
+              ),
+              weekendStyle: TextStyle(
+                fontSize: _daysOfWeekFontSize,
+                color: Color(0xFF6A6A6A),
+              ),
+            ),
             headerStyle: const HeaderStyle(
               formatButtonVisible: false,
               titleCentered: true,
