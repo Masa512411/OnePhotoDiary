@@ -6,18 +6,31 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:one_photo_diary/providers/diary_provider.dart';
 import 'package:one_photo_diary/providers/photo_provider.dart';
 import 'package:one_photo_diary/screens/editor_screen.dart';
 
+import 'helpers/fake_documents.dart';
 import 'helpers/fake_secure_storage.dart';
 
 /// ストレージに触れず、保存呼び出し回数を記録するDiaryNotifier
 class FakeDiaryNotifier extends DiaryNotifier {
-  FakeDiaryNotifier({required this.hasTodayEntry});
+  FakeDiaryNotifier({
+    required this.hasTodayEntry,
+    this.datesWithEntry = const {},
+  });
 
   final bool hasTodayEntry;
+
+  /// 保存済みとして扱う日付（今日以外）
+  final Set<String> datesWithEntry;
+
   int saveCount = 0;
+
+  /// 直近の保存で渡された日付・一言
+  String? savedDate;
+  String? savedCaption;
 
   /// 設定されている間は保存処理をこのCompleterの完了まで止める
   Completer<void>? saveGate;
@@ -41,8 +54,20 @@ class FakeDiaryNotifier extends DiaryNotifier {
   }
 
   @override
-  Future<void> saveEntry({required File photo, required String caption}) async {
+  Future<bool> hasEntryOn(String dateKey) async {
+    if (failCheck) throw Exception('確認失敗');
+    return datesWithEntry.contains(dateKey);
+  }
+
+  @override
+  Future<void> saveEntry({
+    required File photo,
+    required String caption,
+    String? date,
+  }) async {
     saveCount++;
+    savedDate = date;
+    savedCaption = caption;
     if (saveGate != null) await saveGate!.future;
     if (failSave) throw Exception('保存失敗');
   }
@@ -53,11 +78,14 @@ class FakePhotoNotifier extends PhotoNotifier {
   /// trueならクリア処理で例外を投げる
   bool failClear = false;
 
+  int clearCount = 0;
+
   @override
   List<File> build() => [];
 
   @override
   Future<void> clear() async {
+    clearCount++;
     if (failClear) throw Exception('クリア失敗');
     state = [];
   }
@@ -67,17 +95,24 @@ void main() {
   late FakeDiaryNotifier diary;
   late FakePhotoNotifier photos;
 
+  setUpAll(() => initializeDateFormatting('ja_JP'));
+
   Future<void> pumpEditor(
     WidgetTester tester, {
     bool hasTodayEntry = false,
+    Set<String> datesWithEntry = const {},
     List<Override>? diaryOverrides,
+    Widget Function()? editor,
   }) async {
     // 保存ボタンまで画面内に収まるよう縦長の画面サイズにする
     tester.view.physicalSize = const Size(1080, 2400);
     tester.view.devicePixelRatio = 2.0;
     addTearDown(tester.view.reset);
 
-    diary = FakeDiaryNotifier(hasTodayEntry: hasTodayEntry);
+    diary = FakeDiaryNotifier(
+      hasTodayEntry: hasTodayEntry,
+      datesWithEntry: datesWithEntry,
+    );
     photos = FakePhotoNotifier();
     await tester.pumpWidget(
       ProviderScope(
@@ -92,6 +127,7 @@ void main() {
                 onPressed: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) =>
+                        editor?.call() ??
                         EditorScreen(selectedPhoto: File('dummy.jpg')),
                   ),
                 ),
@@ -303,5 +339,174 @@ void main() {
     await tester.pumpAndSettle();
     expect(storage.writtenKeys, isEmpty);
     expect(find.byType(EditorScreen), findsOneWidget);
+  });
+
+  group('過去日の記録', () {
+    Widget pastEditor() =>
+        EditorScreen(selectedPhoto: File('dummy.jpg'), date: '2026-01-01');
+
+    testWidgets('指定した日付で保存し、撮影済み写真はクリアしない', (tester) async {
+      await pumpEditor(tester, editor: pastEditor);
+
+      expect(find.text('2026年01月01日 (木)'), findsOneWidget);
+      expect(find.text('この日の一言'), findsOneWidget);
+      await tester.tap(saveButton());
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(diary.saveCount, 1);
+      expect(diary.savedDate, '2026-01-01');
+      expect(photos.clearCount, 0);
+      expect(find.byType(EditorScreen), findsNothing);
+    });
+
+    testWidgets('その日の日記が保存済みなら上書き確認する', (tester) async {
+      await pumpEditor(
+        tester,
+        // 今日の日記の有無ではなく、指定日の日記の有無で確認する
+        datesWithEntry: {'2026-01-01'},
+        editor: pastEditor,
+      );
+
+      await tester.tap(saveButton());
+      await tester.pumpAndSettle();
+
+      expect(find.text('この日の日記は保存済みです。上書きしますか？'), findsOneWidget);
+      await tester.tap(find.text('上書きする'));
+      await tester.pumpAndSettle();
+      expect(diary.saveCount, 1);
+      expect(diary.savedDate, '2026-01-01');
+    });
+
+    testWidgets('今日の日記があっても指定日に日記が無ければ確認しない', (tester) async {
+      await pumpEditor(tester, hasTodayEntry: true, editor: pastEditor);
+
+      await tester.tap(saveButton());
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(diary.saveCount, 1);
+    });
+  });
+
+  group('編集', () {
+    Widget editEditor() => EditorScreen.edit(
+      entry: DiaryEntry(
+        photo: File('dummy.jpg'),
+        caption: '前の一言',
+        date: '2026-01-01',
+      ),
+    );
+
+    testWidgets('保存済みの一言が入った状態で開き、確認なしで同じ日付に保存する', (tester) async {
+      await pumpEditor(
+        tester,
+        datesWithEntry: {'2026-01-01'},
+        editor: editEditor,
+      );
+
+      expect(find.text('編集する'), findsOneWidget);
+      expect(find.text('前の一言'), findsOneWidget);
+      expect(find.text('写真を変更'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), '新しい一言');
+      await tester.tap(saveButton());
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(diary.saveCount, 1);
+      expect(diary.savedDate, '2026-01-01');
+      expect(diary.savedCaption, '新しい一言');
+      expect(photos.clearCount, 0);
+      expect(find.byType(EditorScreen), findsNothing);
+    });
+  });
+
+  testWidgets('今日の記録では撮影済み写真をクリアし、写真の変更ボタンは出さない', (tester) async {
+    await pumpEditor(tester);
+
+    expect(find.text('写真を変更'), findsNothing);
+    await tester.tap(saveButton());
+    await tester.pumpAndSettle();
+
+    expect(diary.savedDate, isNull);
+    expect(photos.clearCount, 1);
+  });
+
+  group('取り込んだ写真の後片付け', () {
+    testWidgets('保存せずに閉じると取り込んだ写真を削除する', (tester) async {
+      final documents = setUpFakeDocumentsDirectory();
+      FlutterSecureStorage.setMockInitialValues({});
+      final imported = createPhoto(documents, 'imported.jpg');
+      await pumpEditor(
+        tester,
+        editor: () => EditorScreen(
+          selectedPhoto: imported,
+          date: '2026-01-01',
+          photoIsImported: true,
+        ),
+      );
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      // 参照の確認・削除は実際のファイルI/Oのため、実時間で完了を待つ
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 200)),
+      );
+      await tester.pump();
+
+      expect(find.byType(EditorScreen), findsNothing);
+      expect(imported.existsSync(), isFalse);
+    });
+
+    testWidgets('保存済みのエントリが参照している写真は閉じても削除しない', (tester) async {
+      final documents = setUpFakeDocumentsDirectory();
+      FlutterSecureStorage.setMockInitialValues({
+        'diary_dates': jsonEncode(['2026-01-01']),
+        'diary_2026-01-01': jsonEncode({
+          'photo': 'imported.jpg',
+          'caption': '',
+          'date': '2026-01-01',
+        }),
+      });
+      final imported = createPhoto(documents, 'imported.jpg');
+      await pumpEditor(
+        tester,
+        editor: () => EditorScreen(
+          selectedPhoto: imported,
+          date: '2026-01-01',
+          photoIsImported: true,
+        ),
+      );
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 200)),
+      );
+      await tester.pump();
+
+      expect(imported.existsSync(), isTrue);
+    });
+
+    testWidgets('取り込んでいない写真（撮影済み・編集前の写真）は閉じても削除しない', (tester) async {
+      final documents = setUpFakeDocumentsDirectory();
+      FlutterSecureStorage.setMockInitialValues({});
+      final original = createPhoto(documents, 'original.jpg');
+      await pumpEditor(
+        tester,
+        editor: () => EditorScreen.edit(
+          entry: DiaryEntry(photo: original, caption: '', date: '2026-01-01'),
+        ),
+      );
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 200)),
+      );
+      await tester.pump();
+
+      expect(original.existsSync(), isTrue);
+    });
   });
 }

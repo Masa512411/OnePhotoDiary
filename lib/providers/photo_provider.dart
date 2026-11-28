@@ -110,19 +110,47 @@ class PhotoNotifier extends Notifier<List<File>> {
   Future<void> reload() =>
       _serialized(() => _loadFromStorage(discardStale: false));
 
-  /// カメラで写真を撮影し、撮影した画像のパスを返す（キャンセル・上限時はnull）
+  /// カメラで撮影、またはアルバムから選んだ画像のパスを返す
+  /// アルバムからは残り枠ぶんまで複数選べる。残り枠を超えて選ばれた分（[limit]を
+  /// 無視する端末がある）は取り込まず、その枚数を`skipped`で返す。
   /// 保存は時間がかかるため、呼び出し側で保存中の表示をしてから[addPhoto]を呼ぶ
-  Future<String?> pickPhoto() async {
-    if (state.length >= maxPhotos) return null;
+  Future<({List<String> paths, int skipped})> pickPhoto({
+    ImageSource source = ImageSource.camera,
+  }) async {
+    final remaining = maxPhotos - state.length;
+    if (remaining <= 0) return (paths: <String>[], skipped: 0);
 
-    final XFile? photo = await ImagePicker().pickImage(
-      source: ImageSource.camera,
-      // 保存時の変換処理を軽くするため、カメラ側であらかじめ縮小する
-      maxWidth: maxPhotoDimension.toDouble(),
-      maxHeight: maxPhotoDimension.toDouble(),
-      imageQuality: 90,
+    final picker = ref.read(imagePickerProvider);
+    // 保存時の変換処理を軽くするため、取得時にあらかじめ縮小する
+    final size = maxPhotoDimension.toDouble();
+    final List<XFile> photos;
+    if (source == ImageSource.gallery && remaining >= 2) {
+      // pickMultiImageのlimitは2以上でないと指定できない
+      photos = await picker.pickMultiImage(
+        maxWidth: size,
+        maxHeight: size,
+        imageQuality: 90,
+        limit: remaining,
+        // 写真ライブラリの権限を求めずに選べるよう、メタデータは要求しない
+        requestFullMetadata: false,
+      );
+    } else {
+      final photo = await picker.pickImage(
+        source: source,
+        maxWidth: size,
+        maxHeight: size,
+        imageQuality: 90,
+        requestFullMetadata: false,
+      );
+      photos = [?photo];
+    }
+
+    final paths = photos.map((p) => p.path).toList();
+    if (paths.length <= remaining) return (paths: paths, skipped: 0);
+    return (
+      paths: paths.sublist(0, remaining),
+      skipped: paths.length - remaining,
     );
-    return photo?.path;
   }
 
   /// 撮影した画像をEXIFなしでDocumentsに保存し、撮影済み写真に追加する
@@ -186,6 +214,9 @@ Uint8List processCapturedImage(Uint8List rawBytes) {
   image.exif = img.ExifData();
   return img.encodeJpg(image, quality: 90);
 }
+
+/// 写真の取得に使うImagePickerのProvider（テストで差し替え可能にする）
+final imagePickerProvider = Provider<ImagePicker>((ref) => ImagePicker());
 
 /// 現在時刻のProvider（テストで日付の変わり目を再現できるよう差し替え可能にする）
 final clockProvider = Provider<DateTime Function()>((ref) => DateTime.now);
