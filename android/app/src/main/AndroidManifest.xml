@@ -5,7 +5,12 @@
     <application
         android:label="one_photo_diary"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules">
+        <!-- 自動バックアップを無効にする。写真と .install_marker だけが復元され、
+             暗号化された日記（端末の鍵がないと読めない）が欠けた状態になるのを防ぐ。
+             Android 11 以前は allowBackup="false"、12 以降は dataExtractionRules で無効にする -->
 
         <receiver android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
             android:exported="false"/>
