@@ -83,23 +83,87 @@ class DiaryState {
   }
 }
 
-/// 日記の保存に使うストレージ（テストで差し替えられるようProviderにしている）
-final diaryStorageProvider = Provider<FlutterSecureStorage>(
-  (ref) => const FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  ),
+const _defaultDiaryStorage = FlutterSecureStorage(
+  aOptions: AndroidOptions(encryptedSharedPreferences: true),
 );
 
+/// 日記の保存に使うストレージ（テストで差し替えられるようProviderにしている）
+final diaryStorageProvider = Provider<FlutterSecureStorage>(
+  (ref) => _defaultDiaryStorage,
+);
+
+const _diaryDatesKey = 'diary_dates';
+
+/// 日付ごとのエントリのキー（diary_YYYY-MM-DD）
+final _entryKeyPattern = RegExp(r'^diary_(\d{4}-\d{2}-\d{2})$');
+
+/// ストレージから読んだ日付一覧
+class _StoredDates {
+  /// 一覧とdiary_YYYY-MM-DDのキーを合わせた日付
+  final Set<String> dates;
+
+  /// キーからの復元まで成功したか（失敗時は一覧の日付だけ）
+  final bool recovered;
+
+  /// 保存済みの一覧が壊れている、または一覧に無い日付があり、書き直すべきか
+  final bool needsRepair;
+
+  const _StoredDates(this.dates,
+      {required this.recovered, required this.needsRepair});
+}
+
+/// ストレージから日付一覧を読む
+/// 一覧に加えて、残っているdiary_YYYY-MM-DDのキーの日付も合わせて返す
+/// （一覧の一部・全部が失われたデータでも過去の日記を扱えるようにするため）
+///
+/// - 一覧の読み込み自体が失敗した場合は例外を投げる（一時的な失敗の可能性があるため）
+/// - 一覧の中身を解釈できない場合は壊れているとみなし、キーだけから作り直す
+/// - キーの読み込み（readAll）に失敗した場合は一覧だけを返す。
+///   ただし一覧も壊れていれば日付が分からないため例外を投げる
+Future<_StoredDates> _readStoredDates(FlutterSecureStorage storage) async {
+  final json = await storage.read(key: _diaryDatesKey);
+  var listed = <String>{};
+  var corrupt = false;
+  if (json != null) {
+    try {
+      listed = Set<String>.from(jsonDecode(json) as List);
+    } catch (e) {
+      corrupt = true;
+      debugPrint('日記の日付一覧が壊れているため作り直します: $e');
+    }
+  }
+
+  final Iterable<String> keys;
+  try {
+    keys = (await storage.readAll()).keys;
+  } catch (e) {
+    if (corrupt) rethrow;
+    debugPrint('日記の日付一覧の復元に失敗しました: $e');
+    return _StoredDates(listed, recovered: false, needsRepair: false);
+  }
+  final dates = {
+    ...listed,
+    ...keys
+        .map(_entryKeyPattern.firstMatch)
+        .whereType<RegExpMatch>()
+        .map((match) => match.group(1)!),
+  };
+  return _StoredDates(
+    dates,
+    recovered: true,
+    needsRepair: corrupt || dates.length != listed.length,
+  );
+}
+
 class DiaryNotifier extends Notifier<DiaryState> {
-  static const _datesKey = 'diary_dates';
-
-  /// 日付ごとのエントリのキー（diary_YYYY-MM-DD）
-  static final _entryKeyPattern = RegExp(r'^diary_(\d{4}-\d{2}-\d{2})$');
-
   FlutterSecureStorage get _storage => ref.read(diaryStorageProvider);
 
-  /// 直近の日付一覧の読み込みに失敗したか（次回の復帰時に再読み込みする）
+  /// 直近の日付一覧の読み込み（復元を含む）に失敗したか（次回の復帰時に再読み込みする）
   bool _loadFailed = false;
+
+  /// 日付一覧の読み書きを直列に実行するためのキュー
+  /// （読み込み時の書き戻しと保存が入れ違って、日付が減らないようにする）
+  Future<void> _datesQueue = Future.value();
 
   static String _todayKey() =>
       DateTime.now().toIso8601String().substring(0, 10);
@@ -117,46 +181,38 @@ class DiaryNotifier extends Notifier<DiaryState> {
     if (_loadFailed) _loadDates();
   }
 
+  Future<T> _withDatesLock<T>(Future<T> Function() action) {
+    final result = _datesQueue.then((_) => action());
+    _datesQueue = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
   /// 保存済みの日付一覧を読み込む
   /// 失敗しても例外は外に出さず、状態も消さない（次回の復帰時に再試行する）
+  /// 一覧が壊れている・欠けている場合は、復元した一覧を書き戻す
   Future<void> _loadDates() async {
     _loadFailed = false;
     try {
-      final dates = await _readStoredDates();
-      // 読み込み中に保存された日付を消さないよう、現在の状態と合わせる
-      state = state.copyWith(
-        datesWithEntries: {...dates, ...state.datesWithEntries},
-      );
+      await _withDatesLock(() async {
+        final stored = await _readStoredDates(_storage);
+        _loadFailed = !stored.recovered;
+        // 読み込み中に保存された日付を消さないよう、現在の状態と合わせる
+        final dates = {...stored.dates, ...state.datesWithEntries};
+        state = state.copyWith(datesWithEntries: dates);
+        if (stored.needsRepair) {
+          try {
+            await _storage.write(
+                key: _diaryDatesKey, value: jsonEncode(dates.toList()));
+          } catch (e) {
+            // 書き戻せなくても表示や保存には影響しないため無視する
+            debugPrint('日記の日付一覧の書き戻しに失敗しました: $e');
+          }
+        }
+      });
     } catch (e) {
       _loadFailed = true;
       debugPrint('日記の日付一覧の読み込みに失敗しました: $e');
     }
-  }
-
-  /// ストレージから日付一覧を読む
-  /// 一覧に加えて、残っているdiary_YYYY-MM-DDのキーの日付も合わせて返す
-  /// （一覧の一部・全部が失われたデータでも過去の日記を表示できるようにするため）
-  /// 一覧自体を読めない場合は例外を投げる
-  Future<Set<String>> _readStoredDates() async {
-    final json = await _storage.read(key: _datesKey);
-    final dates =
-        json == null ? <String>{} : Set<String>.from(jsonDecode(json) as List);
-    // 復元は補助的な処理のため、失敗しても一覧だけを返す
-    // （一覧を元にしているので、保存しても過去の日付は減らない）
-    final Iterable<String> keys;
-    try {
-      keys = (await _storage.readAll()).keys;
-    } catch (e) {
-      debugPrint('日記の日付一覧の復元に失敗しました: $e');
-      return dates;
-    }
-    return {
-      ...dates,
-      ...keys
-          .map(_entryKeyPattern.firstMatch)
-          .whereType<RegExpMatch>()
-          .map((match) => match.group(1)!),
-    };
   }
 
   /// 指定日のエントリがストレージに保存済みか
@@ -170,26 +226,36 @@ class DiaryNotifier extends Notifier<DiaryState> {
   Future<void> saveEntry({required File photo, required String caption}) async {
     final today = _todayKey();
     final entry = DiaryEntry(photo: photo, caption: caption, date: today);
-    // 日付一覧はメモリ上の状態ではなく保存済みの一覧に追加する
-    // （読み込み前・失敗時に過去の日付を消さないため。読めなければ保存を中止する）
-    final storedDates = await _readStoredDates();
-    // 同じ日の記録を上書きする場合、前の写真を後で削除するため読んでおく
-    final previous = await _storage.read(key: 'diary_$today');
-    await _storage.write(key: 'diary_$today', value: jsonEncode(entry.toJson()));
-    final newDates = {...storedDates, today};
-    await _storage.write(key: _datesKey, value: jsonEncode(newDates.toList()));
-    state = state.copyWith(
-      datesWithEntries: {...newDates, ...state.datesWithEntries},
-    );
-    // 保存済みの一覧を読めたので、状態は最新になっている
-    _loadFailed = false;
+    final previous = await _withDatesLock(() async {
+      // 日付一覧はメモリ上の状態ではなく保存済みの一覧に追加する
+      // （読み込み前・失敗時に過去の日付を消さないため。読めなければ保存を中止する）
+      final stored = await _readStoredDates(_storage);
+      // 同じ日の記録を上書きする場合、前の写真を後で削除するため読んでおく
+      final previous = await _storage.read(key: 'diary_$today');
+      await _storage.write(
+          key: 'diary_$today', value: jsonEncode(entry.toJson()));
+      final newDates = {...stored.dates, today};
+      await _storage.write(
+          key: _diaryDatesKey, value: jsonEncode(newDates.toList()));
+      state = state.copyWith(
+        datesWithEntries: {...newDates, ...state.datesWithEntries},
+      );
+      // 復元まで成功していれば状態は最新。失敗していれば復帰時に再試行する
+      _loadFailed = !stored.recovered;
+      return previous;
+    });
 
-    if (previous != null) {
-      final previousName = PhotoStorage.toStoredName(
+    if (previous == null) return;
+    final String previousName;
+    try {
+      previousName = PhotoStorage.toStoredName(
           (jsonDecode(previous) as Map<String, dynamic>)['photo'] as String);
-      if (previousName != PhotoStorage.toStoredName(photo.path)) {
-        await _deleteReplacedPhoto(previousName);
-      }
+    } catch (_) {
+      // 前のエントリが壊れていても保存自体は完了しているため、削除だけ諦める
+      return;
+    }
+    if (previousName != PhotoStorage.toStoredName(photo.path)) {
+      await _deleteReplacedPhoto(previousName);
     }
   }
 
@@ -199,7 +265,10 @@ class DiaryNotifier extends Notifier<DiaryState> {
     try {
       if ((await loadPendingPhotoNames()).contains(name)) return;
       final documents = await PhotoStorage.documentsDirectory();
-      await deletePhotosIfUnreferenced([PhotoStorage.resolve(name, documents)]);
+      await deletePhotosIfUnreferenced(
+        [PhotoStorage.resolve(name, documents)],
+        storage: _storage,
+      );
     } catch (_) {
       // 削除できなくても保存自体は完了しているため無視する
     }
@@ -246,14 +315,13 @@ final allDiaryEntriesProvider = FutureProvider<List<DiaryEntry>>((ref) async {
 
 /// 保存済みの日記エントリが参照している写真のファイル名一覧を返す
 /// （写真ファイル削除時に、保存済みエントリの写真を誤って消さないために使う）
-Future<Set<String>> loadReferencedPhotoNames() async {
-  const storage = FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
-  final datesJson = await storage.read(key: DiaryNotifier._datesKey);
-  if (datesJson == null) return {};
+/// 一覧に無くてもdiary_YYYY-MM-DDのキーが残っているエントリも含める
+Future<Set<String>> loadReferencedPhotoNames({
+  FlutterSecureStorage storage = _defaultDiaryStorage,
+}) async {
+  final stored = await _readStoredDates(storage);
   final names = <String>{};
-  for (final date in List<String>.from(jsonDecode(datesJson) as List)) {
+  for (final date in stored.dates) {
     final json = await storage.read(key: 'diary_$date');
     if (json == null) continue;
     final entry = jsonDecode(json) as Map<String, dynamic>;
@@ -264,10 +332,13 @@ Future<Set<String>> loadReferencedPhotoNames() async {
 
 /// 保存済みエントリから参照されていない写真ファイルだけを削除する
 /// 参照の確認に失敗した場合は、誤削除を避けるため何も削除しない
-Future<void> deletePhotosIfUnreferenced(List<File> files) async {
+Future<void> deletePhotosIfUnreferenced(
+  List<File> files, {
+  FlutterSecureStorage storage = _defaultDiaryStorage,
+}) async {
   final Set<String> referenced;
   try {
-    referenced = await loadReferencedPhotoNames();
+    referenced = await loadReferencedPhotoNames(storage: storage);
   } catch (_) {
     return;
   }

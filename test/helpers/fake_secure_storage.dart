@@ -12,7 +12,10 @@ class FakeSecureStorage extends FlutterSecureStorage {
   /// trueならreadAllで例外を投げる
   bool failReadAll = false;
 
-  /// 書き込んだキーの記録
+  /// 書き込みで例外を投げるキー
+  final Set<String> writeFailures = {};
+
+  /// 書き込んだキーの記録（失敗した書き込みは含まない）
   final List<String> writtenKeys = [];
 
   /// [key]の読み込みを[times]回失敗させる（省略時は常に失敗）
@@ -59,7 +62,8 @@ class FakeSecureStorage extends FlutterSecureStorage {
     WebOptions? webOptions,
     MacOsOptions? mOptions,
     WindowsOptions? wOptions,
-  }) {
+  }) async {
+    if (writeFailures.contains(key)) throw Exception('書き込み失敗: $key');
     writtenKeys.add(key);
     return super.write(key: key, value: value);
   }
