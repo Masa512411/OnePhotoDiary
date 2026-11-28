@@ -709,6 +709,46 @@ void main() {
       });
     });
 
+    test('未来の日付を指定すると何も書き込まずに失敗する', () async {
+      final documents = setUpFakeDocumentsDirectory();
+      final notifier = await useFakeStorage({
+        'diary_dates': jsonEncode(['2026-01-01']),
+        ...entryOf('2026-01-01', 'a.jpg'),
+      });
+      final now = DateTime.now();
+      final tomorrow = DateTime(now.year, now.month, now.day + 1)
+          .toIso8601String()
+          .substring(0, 10);
+
+      await expectLater(
+        notifier.saveEntry(
+          photo: createPhoto(documents, 'b.jpg'),
+          caption: '',
+          date: tomorrow,
+        ),
+        throwsArgumentError,
+      );
+
+      expect(fakeStorage.writtenKeys, isEmpty);
+      expect(await storage.read(key: 'diary_$tomorrow'), isNull);
+      expect(await storedDates(), {'2026-01-01'});
+      expect(container.read(diaryProvider).datesWithEntries, {'2026-01-01'});
+    });
+
+    test('今日の日付を明示して保存できる', () async {
+      final documents = setUpFakeDocumentsDirectory();
+      final notifier = await useFakeStorage({});
+
+      await notifier.saveEntry(
+        photo: createPhoto(documents, 'a.jpg'),
+        caption: '',
+        date: today,
+      );
+
+      expect(await notifier.hasEntryToday(), isTrue);
+      expect(await storedDates(), {today});
+    });
+
     test('削除するとエントリ・日付一覧・状態から日付が消え、写真も削除される', () async {
       final documents = setUpFakeDocumentsDirectory();
       final photo = createPhoto(documents, 'a.jpg');

@@ -225,12 +225,16 @@ class DiaryNotifier extends Notifier<DiaryState> {
 
   /// エントリを保存する。[date]（yyyy-MM-dd）を省略した場合は今日の日付で保存する
   /// 同じ日のエントリがあれば上書きし、使われなくなった前の写真を削除する
+  /// 未来の日付（今日より後）は記録できないため、何も書き込まずに[ArgumentError]を投げる
   Future<void> saveEntry({
     required File photo,
     required String caption,
     String? date,
   }) async {
     final dateKey = date ?? _todayKey();
+    if (dateKey.compareTo(_todayKey()) > 0) {
+      throw ArgumentError.value(date, 'date', '未来の日付には記録できません');
+    }
     final entry = DiaryEntry(photo: photo, caption: caption, date: dateKey);
     final previous = await _withDatesLock(() async {
       // 日付一覧はメモリ上の状態ではなく保存済みの一覧に追加する
