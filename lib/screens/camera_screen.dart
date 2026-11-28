@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../providers/photo_provider.dart';
 import 'selection_screen.dart';
@@ -14,31 +15,50 @@ class CameraScreen extends ConsumerStatefulWidget {
 }
 
 class _CameraScreenState extends ConsumerState<CameraScreen> {
-  // カメラ起動から保存完了までtrue（二重操作を防ぐ）
+  // カメラ・アルバム起動から保存完了までtrue（二重操作を防ぐ）
   bool _busy = false;
-  // カメラから戻って写真を保存している間true（保存中の表示を出す）
+  // カメラ・アルバムから戻って写真を保存している間true（保存中の表示を出す）
   bool _saving = false;
 
-  Future<void> _takePhoto() async {
+  /// カメラで撮影、またはアルバムから選んだ写真を撮影済み写真として保存する
+  Future<void> _addPhotos(ImageSource source) async {
     if (_busy) return;
     setState(() => _busy = true);
     final notifier = ref.read(pendingPhotosProvider.notifier);
     try {
-      final String? path;
+      final List<String> paths;
+      var skipped = 0;
       try {
-        path = await notifier.pickPhoto();
+        (:paths, :skipped) = await notifier.pickPhoto(source: source);
       } catch (e) {
-        _showError('カメラの起動に失敗しました: $e');
+        _showError(
+          source == ImageSource.camera
+              ? 'カメラの起動に失敗しました: $e'
+              : 'アルバムを開けませんでした: $e',
+        );
         return;
       }
-      if (path == null) return;
+      if (paths.isEmpty) return;
 
-      // 撮影した写真を失わないよう、画面を離れていても保存は行う
+      // 選んだ写真を失わないよう、画面を離れていても保存は行う
       if (mounted) setState(() => _saving = true);
-      try {
-        await notifier.addPhoto(path);
-      } catch (e) {
-        _showError('写真の保存に失敗しました: $e');
+      // 1枚の保存に失敗しても、残りの写真は保存する
+      Object? error;
+      for (final path in paths) {
+        try {
+          // 保存中に上限に達した場合はnullが返り、その写真は取り込まない
+          if (await notifier.addPhoto(path) == null) skipped++;
+        } catch (e) {
+          error ??= e;
+        }
+      }
+      if (error != null) {
+        _showError('写真の保存に失敗しました: $error');
+      } else if (skipped > 0) {
+        _showError(
+          '撮影済み写真は${PhotoNotifier.maxPhotos}枚までのため、'
+          '$skipped枚は取り込みませんでした',
+        );
       }
     } finally {
       if (mounted) {
@@ -55,6 +75,31 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// 「撮影する」「アルバムから選ぶ」のボタン（同じ見た目で並べる）
+  Widget _buildAddButton({
+    required VoidCallback onPressed,
+    required IconData icon,
+    required String label,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      height: 56,
+      child: ElevatedButton.icon(
+        onPressed: _busy ? null : onPressed,
+        icon: Icon(icon),
+        label: Text(label),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.blueGrey,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(28),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -97,82 +142,81 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
           const Text('枚撮影済み', style: TextStyle(color: Colors.grey)),
           const SizedBox(height: 40),
           Expanded(
-            child: GridView.builder(
-              padding: const EdgeInsets.all(16),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                crossAxisSpacing: 10,
-                mainAxisSpacing: 10,
-              ),
-              itemCount: takenPhotos.length,
-              itemBuilder: (context, index) {
-                return Stack(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(
-                        takenPhotos[index],
-                        fit: BoxFit.cover,
-                        width: double.infinity,
-                        height: double.infinity,
-                        errorBuilder: (_, _, _) => Container(
-                          width: double.infinity,
-                          height: double.infinity,
-                          color: Colors.grey[200],
-                          alignment: Alignment.center,
-                          child: const Icon(
-                            Icons.broken_image_outlined,
-                            color: Colors.black26,
-                            size: 48,
+            child: takenPhotos.isEmpty
+                ? const _EmptyHint()
+                : GridView.builder(
+                    padding: const EdgeInsets.all(16),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          crossAxisSpacing: 10,
+                          mainAxisSpacing: 10,
+                        ),
+                    itemCount: takenPhotos.length,
+                    itemBuilder: (context, index) {
+                      return Stack(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: Image.file(
+                              takenPhotos[index],
+                              fit: BoxFit.cover,
+                              width: double.infinity,
+                              height: double.infinity,
+                              errorBuilder: (_, _, _) => Container(
+                                width: double.infinity,
+                                height: double.infinity,
+                                color: Colors.grey[200],
+                                alignment: Alignment.center,
+                                child: const Icon(
+                                  Icons.broken_image_outlined,
+                                  color: Colors.black26,
+                                  size: 48,
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      top: 4,
-                      right: 4,
-                      child: Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: const BoxDecoration(
-                          color: Colors.black54,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Text(
-                          '${index + 1}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
+                          Positioned(
+                            top: 4,
+                            right: 4,
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: const BoxDecoration(
+                                color: Colors.black54,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Text(
+                                '${index + 1}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
+                        ],
+                      );
+                    },
+                  ),
           ),
           Padding(
             padding: const EdgeInsets.all(32.0),
             child: Column(
               children: [
-                if (takenPhotos.length < maxPhotos)
-                  SizedBox(
-                    width: double.infinity,
-                    height: 56,
-                    child: ElevatedButton.icon(
-                      onPressed: _busy ? null : _takePhoto,
-                      icon: const Icon(Icons.camera_alt),
-                      label: const Text('撮影する'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blueGrey,
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(28),
-                        ),
-                      ),
-                    ),
+                // 上限に達したら撮影・アルバムの両方を隠す
+                if (takenPhotos.length < maxPhotos) ...[
+                  _buildAddButton(
+                    onPressed: () => _addPhotos(ImageSource.camera),
+                    icon: Icons.camera_alt,
+                    label: '撮影する',
                   ),
+                  const SizedBox(height: 16),
+                  _buildAddButton(
+                    onPressed: () => _addPhotos(ImageSource.gallery),
+                    icon: Icons.photo_library,
+                    label: 'アルバムから選ぶ',
+                  ),
+                ],
                 if (takenPhotos.isNotEmpty) ...[
                   const SizedBox(height: 16),
                   SizedBox(
@@ -205,6 +249,25 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 写真が1枚もないときにグリッドの代わりに表示する案内
+class _EmptyHint extends StatelessWidget {
+  const _EmptyHint();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: const [
+          Icon(Icons.photo_camera_outlined, size: 64, color: Colors.black26),
+          SizedBox(height: 12),
+          Text('撮影するか、アルバムから選んでください', style: TextStyle(color: Colors.grey)),
         ],
       ),
     );
