@@ -32,3 +32,7 @@ Runner/GeneratedPluginRegistrant.*
 !default.mode2v3
 !default.pbxuser
 !default.perspectivev3
+
+# iOSビルドで生成されるSwift Package Managerのファイル
+Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+Runner.xcworkspace/xcshareddata/swiftpm/
