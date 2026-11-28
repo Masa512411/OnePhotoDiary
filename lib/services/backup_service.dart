@@ -33,7 +33,7 @@ class BackupService {
   ///
   /// エントリは diary_YYYY-MM-DD のキーから集める（日付一覧から漏れた日記も含めるため）。
   /// 一部だけのバックアップにならないよう、読み込みに失敗した場合は例外を投げる。
-  /// 写真ファイルが見つからないエントリは書き出さず、件数を結果で返す。
+  /// 写真ファイルが見つからない・内容が壊れているエントリは書き出さず、件数を結果で返す。
   static Future<BackupExportResult> exportBackup({
     required FlutterSecureStorage storage,
     required Directory documents,
@@ -53,8 +53,17 @@ class BackupService {
     final photos = <String, String>{};
     var skipped = 0;
     for (final date in dates) {
-      final json = jsonDecode(all['diary_$date']!) as Map<String, dynamic>;
-      final name = PhotoStorage.toStoredName(json['photo'] as String);
+      final String name;
+      final String caption;
+      try {
+        final json = jsonDecode(all['diary_$date']!) as Map<String, dynamic>;
+        name = PhotoStorage.toStoredName(json['photo'] as String);
+        caption = json['caption'] as String? ?? '';
+      } catch (_) {
+        // 壊れたエントリがあっても他の日記は書き出せるようにする
+        skipped++;
+        continue;
+      }
       final photo = PhotoStorage.resolve(name, documents);
       if (!await photo.exists()) {
         skipped++;
@@ -63,7 +72,7 @@ class BackupService {
       photos['$photosDir/$name'] = photo.path;
       manifestEntries.add({
         'date': date,
-        'caption': json['caption'] as String? ?? '',
+        'caption': caption,
         'photo': '$photosDir/$name',
       });
     }
@@ -269,7 +278,7 @@ class BackupExportResult {
   /// 書き出したエントリ数
   final int entryCount;
 
-  /// 写真ファイルが見つからず書き出さなかったエントリ数
+  /// 写真ファイルが見つからない・内容が壊れているため書き出さなかったエントリ数
   final int skippedCount;
 
   const BackupExportResult({

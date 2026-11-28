@@ -40,8 +40,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   void _showMessage(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<bool> _confirm({
@@ -83,114 +84,130 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// 日記をzipに書き出し、共有シートで保存先を選んでもらう
   /// [shareOrigin]はiPadで共有シートを表示する位置
   Future<void> _exportBackup(Rect? shareOrigin) => _runBackupTask(() async {
-        final ok = await _confirm(
-          title: 'バックアップを書き出す',
-          content: 'すべての日記の写真とテキストを1つのファイルに書き出します。\n\n'
-              '書き出したファイルは暗号化されません。'
-              '保存先（ファイル・Driveなど）は他の人に見られない場所を選んでください。',
-          okLabel: '書き出す',
-        );
-        if (!ok || !mounted) return;
+    final ok = await _confirm(
+      title: 'バックアップを書き出す',
+      content:
+          'すべての日記の写真とテキストを1つのファイルに書き出します。\n\n'
+          '書き出したファイルは暗号化されません。'
+          '保存先（ファイル・Driveなど）は他の人に見られない場所を選んでください。',
+      okLabel: '書き出す',
+    );
+    if (!ok || !mounted) return;
 
-        final BackupExportResult result;
-        try {
-          result = await BackupService.exportBackup(
-            storage: ref.read(diaryStorageProvider),
-            documents: await PhotoStorage.documentsDirectory(),
-            outputDir: await getTemporaryDirectory(),
-          );
-        } catch (e) {
-          debugPrint('バックアップの書き出しに失敗しました: $e');
-          _showMessage('バックアップの書き出しに失敗しました');
-          return;
-        }
-        if (result.entryCount == 0) {
-          _showMessage('書き出せる日記がありません');
-          return;
-        }
+    final BackupExportResult result;
+    try {
+      result = await BackupService.exportBackup(
+        storage: ref.read(diaryStorageProvider),
+        documents: await PhotoStorage.documentsDirectory(),
+        outputDir: await getTemporaryDirectory(),
+      );
+    } catch (e) {
+      debugPrint('バックアップの書き出しに失敗しました: $e');
+      _showMessage('バックアップの書き出しに失敗しました');
+      return;
+    }
+    if (result.entryCount == 0) {
+      _showMessage('書き出せる日記がありません');
+      return;
+    }
 
-        try {
-          await SharePlus.instance.share(ShareParams(
-            files: [XFile(result.file.path, mimeType: 'application/zip')],
-            sharePositionOrigin: shareOrigin,
-          ));
-        } catch (e) {
-          debugPrint('バックアップの共有に失敗しました: $e');
-          _showMessage('バックアップの共有に失敗しました');
-          return;
-        }
-        if (result.skippedCount > 0) {
-          _showMessage(
-              '写真が見つからない${result.skippedCount}件の日記は書き出せませんでした');
-        }
-      });
+    try {
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(result.file.path, mimeType: 'application/zip')],
+          sharePositionOrigin: shareOrigin,
+        ),
+      );
+    } catch (e) {
+      debugPrint('バックアップの共有に失敗しました: $e');
+      _showMessage('バックアップの共有に失敗しました');
+      return;
+    }
+    if (result.skippedCount > 0) {
+      _showMessage('写真が見つからないなどの理由で${result.skippedCount}件の日記は書き出せませんでした');
+    }
+  });
 
   /// バックアップのzipを選んで復元する
+  /// 選んだファイルはアプリの一時領域にコピーされるため、終わったら削除する
+  /// （暗号化されていない日記のコピーを端末に残さないため）
   Future<void> _restoreBackup() => _runBackupTask(() async {
-        final FilePickerResult? picked;
-        try {
-          picked = await FilePicker.pickFiles(
-            type: FileType.custom,
-            allowedExtensions: ['zip'],
-          );
-        } catch (e) {
-          debugPrint('ファイルの選択に失敗しました: $e');
-          _showMessage('ファイルを選択できませんでした');
-          return;
-        }
-        final zipPath = picked?.files.single.path;
-        if (zipPath == null || !mounted) return;
+    try {
+      await _pickAndRestoreBackup();
+    } finally {
+      try {
+        await FilePicker.clearTemporaryFiles();
+      } catch (_) {
+        // 削除できなくても復元には影響しないため無視する
+      }
+    }
+  });
 
-        final storage = ref.read(diaryStorageProvider);
-        final BackupContents contents;
-        final int overlapping;
-        try {
-          contents = await BackupService.readBackup(zipPath);
-          overlapping = await BackupService.countOverlapping(contents, storage);
-        } on BackupFormatException catch (e) {
-          _showMessage(e.message);
-          return;
-        } catch (e) {
-          debugPrint('バックアップの読み込みに失敗しました: $e');
-          _showMessage('バックアップを読み込めませんでした');
-          return;
-        }
-        if (contents.entries.isEmpty) {
-          _showMessage('バックアップに日記が含まれていません');
-          return;
-        }
-        if (!mounted) return;
+  Future<void> _pickAndRestoreBackup() async {
+    final FilePickerResult? picked;
+    try {
+      // 拡張子で絞り込むと、Androidでは保存先によってzipを選べないことがあるため
+      // 絞り込まずに選んでもらい、中身の検証で判定する
+      picked = await FilePicker.pickFiles();
+    } catch (e) {
+      debugPrint('ファイルの選択に失敗しました: $e');
+      _showMessage('ファイルを選択できませんでした');
+      return;
+    }
+    final zipPath = picked?.files.single.path;
+    if (zipPath == null || !mounted) return;
 
-        final ok = await _confirm(
-          title: 'バックアップから復元',
-          content: '${contents.entries.length}件の日記を復元します。'
-              '${overlapping > 0 ? '\n\nそのうち$overlapping件は保存済みの日記と日付が重なっています。'
-                  '同じ日付の日記はバックアップの内容で上書きされます。' : ''}',
-          okLabel: '復元する',
-        );
-        if (!ok || !mounted) return;
+    final storage = ref.read(diaryStorageProvider);
+    final BackupContents contents;
+    final int overlapping;
+    try {
+      contents = await BackupService.readBackup(zipPath);
+      overlapping = await BackupService.countOverlapping(contents, storage);
+    } on BackupFormatException catch (e) {
+      _showMessage(e.message);
+      return;
+    } catch (e) {
+      debugPrint('バックアップの読み込みに失敗しました: $e');
+      _showMessage('バックアップを読み込めませんでした');
+      return;
+    }
+    if (contents.entries.isEmpty) {
+      _showMessage('バックアップに日記が含まれていません');
+      return;
+    }
+    if (!mounted) return;
 
-        try {
-          await BackupService.restoreBackup(
-            contents,
-            documents: await PhotoStorage.documentsDirectory(),
-            storage: storage,
-            importEntries: ref.read(diaryProvider.notifier).importEntries,
-          );
-        } on BackupFormatException catch (e) {
-          _showMessage(e.message);
-          return;
-        } on FileSystemException catch (e) {
-          debugPrint('バックアップの復元に失敗しました: $e');
-          _showMessage('復元に失敗しました。端末の空き容量を確認してください');
-          return;
-        } catch (e) {
-          debugPrint('バックアップの復元に失敗しました: $e');
-          _showMessage('バックアップの復元に失敗しました');
-          return;
-        }
-        _showMessage('${contents.entries.length}件の日記を復元しました');
-      });
+    final ok = await _confirm(
+      title: 'バックアップから復元',
+      content:
+          '${contents.entries.length}件の日記を復元します。'
+          '${overlapping > 0 ? '\n\nそのうち$overlapping件は保存済みの日記と日付が重なっています。'
+                    '同じ日付の日記はバックアップの内容で上書きされます。' : ''}',
+      okLabel: '復元する',
+    );
+    if (!ok || !mounted) return;
+
+    try {
+      await BackupService.restoreBackup(
+        contents,
+        documents: await PhotoStorage.documentsDirectory(),
+        storage: storage,
+        importEntries: ref.read(diaryProvider.notifier).importEntries,
+      );
+    } on BackupFormatException catch (e) {
+      _showMessage(e.message);
+      return;
+    } on FileSystemException catch (e) {
+      debugPrint('バックアップの復元に失敗しました: $e');
+      _showMessage('復元に失敗しました。端末の空き容量を確認してください');
+      return;
+    } catch (e) {
+      debugPrint('バックアップの復元に失敗しました: $e');
+      _showMessage('バックアップの復元に失敗しました');
+      return;
+    }
+    _showMessage('${contents.entries.length}件の日記を復元しました');
+  }
 
   /// ウィジェットの画面上の位置（iPadの共有シートの表示位置に使う）
   static Rect? _originOf(BuildContext context) {
@@ -229,8 +246,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             subtitle: const Text('指定した時刻に通知でお知らせします'),
             value: reminder.enabled,
             activeThumbColor: Colors.blueGrey,
-            onChanged: (v) =>
-                ref.read(reminderProvider.notifier).setEnabled(v),
+            onChanged: (v) => ref.read(reminderProvider.notifier).setEnabled(v),
           ),
           ListTile(
             title: const Text('通知時刻'),

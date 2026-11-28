@@ -120,11 +120,12 @@ void main() {
       expect(archive.find('photos/b.jpg'), isNotNull);
     });
 
-    test('写真ファイルが無いエントリは書き出さず件数を返す', () async {
+    test('写真ファイルが無い・壊れたエントリは書き出さず件数を返す', () async {
       _createJpeg(documents, 'a.jpg');
       FlutterSecureStorage.setMockInitialValues({
         'diary_2026-11-26': _entryJson('2026-11-26', 'a.jpg', ''),
         'diary_2026-11-27': _entryJson('2026-11-27', 'missing.jpg', ''),
+        'diary_2026-11-28': 'not json',
       });
 
       final result = await BackupService.exportBackup(
@@ -134,7 +135,7 @@ void main() {
       );
 
       expect(result.entryCount, 1);
-      expect(result.skippedCount, 1);
+      expect(result.skippedCount, 2);
     });
 
     test('エントリを読めない場合は失敗する（一部だけのバックアップを作らない）', () async {
