@@ -50,6 +50,6 @@
 	<key>NSCameraUsageDescription</key>
 	<string>今日の一枚を撮影するためにカメラを使用します</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>日記に使う写真をアルバムから選ぶために写真ライブラリを使用します</string>
+	<string>今日の一枚に使う写真をアルバムから選ぶために使用します</string>
 </dict>
 </plist>
