@@ -23,6 +23,20 @@ class FakeNotificationsPlugin implements FlutterLocalNotificationsPlugin {
   final scheduledIds = <int>[];
   int cancelAllCalls = 0;
 
+  /// initializeで渡された、通知タップ時のコールバック
+  DidReceiveNotificationResponseCallback? onResponse;
+
+  /// getNotificationAppLaunchDetailsの戻り値（通知のタップで起動した場合を再現する）
+  NotificationAppLaunchDetails? launchDetails;
+
+  /// 通知をタップしたことにする
+  void tap(String? payload) => onResponse?.call(
+    NotificationResponse(
+      notificationResponseType: NotificationResponseType.selectedNotification,
+      payload: payload,
+    ),
+  );
+
   /// Android の強制停止・バックアップ復元を再現する（OS の予約だけ消え、キャッシュは残る）
   void forceStop() => alarms.clear();
 
@@ -33,6 +47,21 @@ class FakeNotificationsPlugin implements FlutterLocalNotificationsPlugin {
     payloads.remove(id);
     displayed.add(id);
   }
+
+  @override
+  Future<bool?> initialize(
+    InitializationSettings initializationSettings, {
+    DidReceiveNotificationResponseCallback? onDidReceiveNotificationResponse,
+    DidReceiveBackgroundNotificationResponseCallback?
+    onDidReceiveBackgroundNotificationResponse,
+  }) async {
+    onResponse = onDidReceiveNotificationResponse;
+    return true;
+  }
+
+  @override
+  Future<NotificationAppLaunchDetails?>
+  getNotificationAppLaunchDetails() async => launchDetails;
 
   @override
   Future<List<PendingNotificationRequest>>

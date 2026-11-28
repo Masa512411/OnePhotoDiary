@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
+import 'providers/auth_provider.dart';
+import 'providers/calendar_provider.dart';
+import 'providers/diary_provider.dart';
+import 'providers/photo_provider.dart';
 import 'providers/reminder_provider.dart';
 import 'screens/app_lock_gate.dart';
+import 'screens/camera_screen.dart';
 import 'screens/home_screen.dart';
 import 'services/backup_service.dart';
 import 'services/install_guard.dart';
@@ -48,8 +53,123 @@ class MyApp extends StatelessWidget {
       navigatorKey: navigatorKey,
       home: const HomeScreen(),
       // 画面スタックの上にロック画面を重ねる
-      builder: (context, child) =>
-          AppLockGate(navigatorKey: navigatorKey, child: child!),
+      builder: (context, child) => AppLockGate(
+        navigatorKey: navigatorKey,
+        child: ReminderTapHandler(navigatorKey: navigatorKey, child: child!),
+      ),
     );
   }
+}
+
+/// リマインダー通知のタップで「今日の撮影」画面を開く
+///
+/// AppLockGate の内側に置くため、一度ロック解除するまでは生成されない。
+/// バックグラウンドからのタップは復帰時の再ロックより先に届くことがあるので、
+/// 受け取った時点では遷移せず、前面にいてロック解除されていることを
+/// フレーム描画後に確かめてから開く（ロック画面の裏で開かないようにする）
+class ReminderTapHandler extends ConsumerStatefulWidget {
+  final GlobalKey<NavigatorState> navigatorKey;
+  final Widget child;
+
+  const ReminderTapHandler({
+    super.key,
+    required this.navigatorKey,
+    required this.child,
+  });
+
+  @override
+  ConsumerState<ReminderTapHandler> createState() => _ReminderTapHandlerState();
+}
+
+class _ReminderTapHandlerState extends ConsumerState<ReminderTapHandler> {
+  late final NotificationService _notifications;
+  late final AppLifecycleListener _lifecycleListener;
+
+  // 判定用のフレームコールバックを登録済みか
+  bool _checkScheduled = false;
+
+  // 記録済みの確認から遷移までの間true（連続タップで二重に開かない）
+  bool _opening = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _notifications = ref.read(notificationServiceProvider);
+    _notifications.reminderTapPending.addListener(_scheduleCheck);
+    _lifecycleListener = AppLifecycleListener(onResume: _scheduleCheck);
+    ref.listenManual(authProvider.select((s) => s.isUnlocked), (_, unlocked) {
+      if (unlocked) _scheduleCheck();
+    });
+    // 起動時のタップは、初回のロック解除でこの画面が生成された時点で保留されている
+    _scheduleCheck();
+  }
+
+  @override
+  void dispose() {
+    _notifications.reminderTapPending.removeListener(_scheduleCheck);
+    _lifecycleListener.dispose();
+    super.dispose();
+  }
+
+  void _scheduleCheck() {
+    if (_checkScheduled || !_notifications.reminderTapPending.value) return;
+    _checkScheduled = true;
+    // 復帰時の再ロックとロック画面の描画が済んでから判定する
+    // （バックグラウンド中はフレームが止まるので、前面に戻るまで待つことになる）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkScheduled = false;
+      _openCameraIfReady();
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// 前面にいて、ロック解除済みで、画面スタックが使えるか
+  bool _isReady() {
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    return (lifecycle == null || lifecycle == AppLifecycleState.resumed) &&
+        ref.read(authProvider).isUnlocked &&
+        widget.navigatorKey.currentState != null;
+  }
+
+  Future<void> _openCameraIfReady() async {
+    if (!mounted || _opening || !_isReady()) return;
+    _opening = true;
+    Future<void>? cameraClosed;
+    try {
+      // 起動直後は日付一覧の読み込みが終わっていないことがあるため、ストレージで確かめる
+      bool recorded;
+      try {
+        recorded = await ref.read(diaryProvider.notifier).hasEntryToday();
+      } catch (e) {
+        debugPrint('今日の記録の確認に失敗しました: $e');
+        recorded = false;
+      }
+      // 確認中に再ロック・離脱した場合は、戻ってきたときに改めて判定する
+      if (!mounted || !_isReady()) return;
+      if (!_notifications.consumeReminderTap()) return;
+
+      final navigator = widget.navigatorKey.currentState!;
+      // 撮影・編集など他の画面を開いている間は割り込まない
+      // （閉じると取り込んだ写真を削除する画面もあるため、ホームへ戻すこともしない）
+      if (navigator.canPop()) return;
+
+      if (recorded) {
+        // 今日は記録済みなので撮影画面へは進まず、ホームで今日の記録を表示する
+        final now = DateTime.now();
+        ref.read(calendarProvider.notifier).selectDay(now, now);
+        return;
+      }
+      cameraClosed = navigator.push(
+        MaterialPageRoute(builder: (context) => const CameraScreen()),
+      );
+    } finally {
+      _opening = false;
+    }
+    await cameraClosed;
+    // ホームの撮影ボタンから開いたときと同じく、撮影済み写真を読み込み直す
+    if (mounted) ref.read(pendingPhotosProvider.notifier).reload();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

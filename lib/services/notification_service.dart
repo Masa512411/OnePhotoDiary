@@ -54,6 +54,12 @@ class NotificationService {
   final bool _trustPendingList;
   bool _initialized = false;
 
+  /// リマインダー通知がタップされ、まだ撮影画面へ進んでいないか。
+  /// 起動時（ProviderContainer の生成前）のタップも取りこぼさないようサービス側で保持し、
+  /// 画面側が遷移できる状態になってから [consumeReminderTap] で取り出す。
+  /// 連続タップや、起動理由とコールバックの両方で届いた場合も1回にまとまる
+  final ValueNotifier<bool> reminderTapPending = ValueNotifier(false);
+
   Future<void> init() async {
     if (_initialized) return;
 
@@ -69,9 +75,41 @@ class NotificationService {
     );
     await _plugin.initialize(
       const InitializationSettings(android: androidInit, iOS: iosInit),
+      onDidReceiveNotificationResponse: handleNotificationResponse,
     );
 
+    // アプリが終了している状態から通知のタップで起動された場合
+    try {
+      final launch = await _plugin.getNotificationAppLaunchDetails();
+      if (launch != null && launch.didNotificationLaunchApp) {
+        handleNotificationResponse(launch.notificationResponse);
+      }
+    } catch (e) {
+      debugPrint('通知による起動の確認に失敗しました: $e');
+    }
+
     _initialized = true;
+  }
+
+  /// リマインダー通知のタップか（このサービスが予約した通知だけを対象にする）
+  @visibleForTesting
+  static bool isReminderTap(NotificationResponse? response) =>
+      response != null &&
+      response.notificationResponseType ==
+          NotificationResponseType.selectedNotification &&
+      (response.payload?.startsWith(_reminderPayloadPrefix) ?? false);
+
+  /// 通知がタップされたときに呼ばれる。リマインダーなら遷移待ちにする
+  @visibleForTesting
+  void handleNotificationResponse(NotificationResponse? response) {
+    if (isReminderTap(response)) reminderTapPending.value = true;
+  }
+
+  /// 遷移待ちのタップを取り出す（取り出したらtrue）
+  bool consumeReminderTap() {
+    if (!reminderTapPending.value) return false;
+    reminderTapPending.value = false;
+    return true;
   }
 
   /// 端末のタイムゾーンを読み直す（バックグラウンド中に変更された場合に備える）
@@ -120,7 +158,9 @@ class NotificationService {
 
   /// 予約時刻をpayloadに持たせ、時刻が変わっていない予約は入れ直さない
   static String _payloadFor(TimeOfDay time) =>
-      'reminder:${time.hour}:${time.minute}';
+      '$_reminderPayloadPrefix${time.hour}:${time.minute}';
+
+  static const _reminderPayloadPrefix = 'reminder:';
 
   /// 指定された時刻で今後 [scheduleDays] 日分の通知を予約する。
   /// [skipDates] に含まれる日（YYYY-MM-DD 形式）はスキップ。
