@@ -56,3 +56,8 @@ firebase.json
 # Claude Code internal files
 .claude/
 CLAUDE.md
+
+# Android release signing (secrets, see docs/release.md)
+key.properties
+*.jks
+*.keystore
