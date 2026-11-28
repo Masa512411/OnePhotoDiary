@@ -129,8 +129,8 @@ Future<File?> pickEntryPhoto(BuildContext context) async {
   if (path == null || !context.mounted) return null;
 
   // 保存が終わるまで操作できないよう、閉じられないダイアログで覆う
-  final navigator = Navigator.of(context);
-  showDialog<void>(
+  // 保存後は最前面の画面ではなく、このダイアログを指定して閉じる
+  final progress = DialogRoute<void>(
     context: context,
     barrierDismissible: false,
     builder: (context) => const PopScope(
@@ -152,13 +152,14 @@ Future<File?> pickEntryPhoto(BuildContext context) async {
       ),
     ),
   );
+  Navigator.of(context, rootNavigator: true).push(progress);
   try {
     return await PhotoImport.save(path);
   } catch (e) {
     if (context.mounted) _showError(context, '写真の保存に失敗しました: $e');
     return null;
   } finally {
-    navigator.pop();
+    if (progress.isActive) progress.navigator?.removeRoute(progress);
   }
 }
 

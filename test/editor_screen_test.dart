@@ -11,6 +11,7 @@ import 'package:one_photo_diary/providers/diary_provider.dart';
 import 'package:one_photo_diary/providers/photo_provider.dart';
 import 'package:one_photo_diary/screens/editor_screen.dart';
 
+import 'helpers/fake_documents.dart';
 import 'helpers/fake_secure_storage.dart';
 
 /// ストレージに触れず、保存呼び出し回数を記録するDiaryNotifier
@@ -429,5 +430,83 @@ void main() {
 
     expect(diary.savedDate, isNull);
     expect(photos.clearCount, 1);
+  });
+
+  group('取り込んだ写真の後片付け', () {
+    testWidgets('保存せずに閉じると取り込んだ写真を削除する', (tester) async {
+      final documents = setUpFakeDocumentsDirectory();
+      FlutterSecureStorage.setMockInitialValues({});
+      final imported = createPhoto(documents, 'imported.jpg');
+      await pumpEditor(
+        tester,
+        editor: () => EditorScreen(
+          selectedPhoto: imported,
+          date: '2026-01-01',
+          photoIsImported: true,
+        ),
+      );
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      // 参照の確認・削除は実際のファイルI/Oのため、実時間で完了を待つ
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 200)),
+      );
+      await tester.pump();
+
+      expect(find.byType(EditorScreen), findsNothing);
+      expect(imported.existsSync(), isFalse);
+    });
+
+    testWidgets('保存済みのエントリが参照している写真は閉じても削除しない', (tester) async {
+      final documents = setUpFakeDocumentsDirectory();
+      FlutterSecureStorage.setMockInitialValues({
+        'diary_dates': jsonEncode(['2026-01-01']),
+        'diary_2026-01-01': jsonEncode({
+          'photo': 'imported.jpg',
+          'caption': '',
+          'date': '2026-01-01',
+        }),
+      });
+      final imported = createPhoto(documents, 'imported.jpg');
+      await pumpEditor(
+        tester,
+        editor: () => EditorScreen(
+          selectedPhoto: imported,
+          date: '2026-01-01',
+          photoIsImported: true,
+        ),
+      );
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 200)),
+      );
+      await tester.pump();
+
+      expect(imported.existsSync(), isTrue);
+    });
+
+    testWidgets('取り込んでいない写真（撮影済み・編集前の写真）は閉じても削除しない', (tester) async {
+      final documents = setUpFakeDocumentsDirectory();
+      FlutterSecureStorage.setMockInitialValues({});
+      final original = createPhoto(documents, 'original.jpg');
+      await pumpEditor(
+        tester,
+        editor: () => EditorScreen.edit(
+          entry: DiaryEntry(photo: original, caption: '', date: '2026-01-01'),
+        ),
+      );
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 200)),
+      );
+      await tester.pump();
+
+      expect(original.existsSync(), isTrue);
+    });
   });
 }
