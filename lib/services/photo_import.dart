@@ -36,9 +36,7 @@ class PhotoImport {
 
     final rawBytes = await File(sourcePath).readAsBytes();
     // デコード・エンコードは重いため、UIを止めないよう別isolateで行う
-    // processCapturedImageはテスト用に@visibleForTestingが付いているが、
-    // 撮影時と同じ変換（EXIF除去・縮小）を使うため、photo_provider.dartを変えずに呼び出す
-    // ignore: invalid_use_of_visible_for_testing_member
+    // 撮影時と同じ変換（EXIF除去・縮小）を使う
     final cleanBytes = await compute(processCapturedImage, rawBytes);
     return File(destPath).writeAsBytes(cleanBytes);
   }
