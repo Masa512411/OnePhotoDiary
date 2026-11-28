@@ -20,6 +20,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// バックアップの書き出し・復元の処理中か（ボタンの無効化とインジケーター表示に使う）
   bool _isBackupBusy = false;
 
+  @override
+  void initState() {
+    super.initState();
+    _deleteStaleExports();
+  }
+
+  /// 以前に書き出したまま残っているzipを片付ける
+  /// （暗号化されていないため、次回の書き出しまで残さない）
+  static Future<void> _deleteStaleExports() async {
+    try {
+      await BackupService.deleteOldExports(
+        await getTemporaryDirectory(),
+        olderThan: BackupService.staleExportAge,
+      );
+    } catch (_) {
+      // 片付けられなくても設定画面の動作には影響しないため無視する
+    }
+  }
+
   String _formatTime(TimeOfDay t) =>
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
@@ -106,15 +125,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _showMessage('バックアップの書き出しに失敗しました');
       return;
     }
-    if (result.entryCount == 0) {
-      _showMessage('書き出せる日記がありません');
+    final file = result.file;
+    if (file == null) {
+      _showMessage(
+        result.complete ? '書き出せる日記がありません' : '日記を読み込めませんでした。時間をおいて再度お試しください',
+      );
       return;
     }
 
     try {
       await SharePlus.instance.share(
         ShareParams(
-          files: [XFile(result.file.path, mimeType: 'application/zip')],
+          files: [XFile(file.path, mimeType: 'application/zip')],
           sharePositionOrigin: shareOrigin,
         ),
       );
@@ -123,7 +145,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _showMessage('バックアップの共有に失敗しました');
       return;
     }
-    if (result.skippedCount > 0) {
+    if (!result.complete) {
+      _showMessage('一部の日記を確認できなかったため、書き出しに含まれていない可能性があります');
+    } else if (result.skippedCount > 0) {
       _showMessage('写真が見つからないなどの理由で${result.skippedCount}件の日記は書き出せませんでした');
     }
   });
@@ -172,7 +196,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       return;
     }
     if (contents.entries.isEmpty) {
-      _showMessage('バックアップに日記が含まれていません');
+      _showMessage(
+        contents.skippedFutureCount > 0
+            ? 'バックアップの日記はすべて未来の日付のため復元できません'
+            : 'バックアップに日記が含まれていません',
+      );
       return;
     }
     if (!mounted) return;
@@ -182,7 +210,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       content:
           '${contents.entries.length}件の日記を復元します。'
           '${overlapping > 0 ? '\n\nそのうち$overlapping件は保存済みの日記と日付が重なっています。'
-                    '同じ日付の日記はバックアップの内容で上書きされます。' : ''}',
+                    '同じ日付の日記はバックアップの内容で上書きされます。' : ''}'
+          '${contents.skippedFutureCount > 0 ? '\n\n未来の日付の${contents.skippedFutureCount}件は復元しません。' : ''}',
       okLabel: '復元する',
     );
     if (!ok || !mounted) return;

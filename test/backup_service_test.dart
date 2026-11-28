@@ -21,10 +21,31 @@ File _createJpeg(Directory documents, String name) =>
 String _entryJson(String date, String photo, String caption) =>
     jsonEncode({'photo': photo, 'caption': caption, 'date': date});
 
+String _dateKey(DateTime d) => d.toIso8601String().substring(0, 10);
+
+/// 削除の失敗も再現できるストレージ（復元の取り消しの失敗を再現するため）
+class _FailingDeleteStorage extends FakeSecureStorage {
+  final Set<String> deleteFailures = {};
+
+  @override
+  Future<void> delete({
+    required String key,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    if (deleteFailures.contains(key)) throw Exception('削除失敗: $key');
+    return super.delete(key: key);
+  }
+}
+
 void main() {
   late Directory documents;
   late Directory outputDir;
-  late FakeSecureStorage storage;
+  late _FailingDeleteStorage storage;
   late ProviderContainer container;
 
   setUp(() {
@@ -33,7 +54,7 @@ void main() {
     addTearDown(() {
       if (outputDir.existsSync()) outputDir.deleteSync(recursive: true);
     });
-    storage = FakeSecureStorage();
+    storage = _FailingDeleteStorage();
     container = ProviderContainer(
       overrides: [diaryStorageProvider.overrideWithValue(storage)],
     );
@@ -79,6 +100,16 @@ void main() {
         importEntries: notifier.importEntries,
       );
 
+  /// 2件（11/26: photos/a.jpg、11/27: photos/b.jpg）のバックアップを読み込む
+  Future<BackupContents> readTwoEntries() async =>
+      BackupService.readBackup(writeZip(
+        manifestOf([
+          {'date': '2026-11-26', 'caption': '一件目', 'photo': 'photos/a.jpg'},
+          {'date': '2026-11-27', 'caption': '二件目', 'photo': 'photos/b.jpg'},
+        ]),
+        photos: {'photos/a.jpg': _jpeg(), 'photos/b.jpg': _jpeg()},
+      ).path);
+
   Set<String> documentNames() => {
         for (final f in documents.listSync().whereType<File>())
           f.uri.pathSegments.last,
@@ -105,7 +136,8 @@ void main() {
 
       expect(result.entryCount, 2);
       expect(result.skippedCount, 0);
-      final archive = ZipDecoder().decodeBytes(result.file.readAsBytesSync());
+      expect(result.complete, isTrue);
+      final archive = ZipDecoder().decodeBytes(result.file!.readAsBytesSync());
       final manifest = jsonDecode(
               utf8.decode(archive.find('manifest.json')!.readBytes()!))
           as Map<String, dynamic>;
@@ -138,8 +170,27 @@ void main() {
       expect(result.skippedCount, 2);
     });
 
-    test('エントリを読めない場合は失敗する（一部だけのバックアップを作らない）', () async {
-      FlutterSecureStorage.setMockInitialValues({});
+    test('キーを確認できなくても、日付一覧の日記は書き出して不完全と示す', () async {
+      _createJpeg(documents, 'a.jpg');
+      FlutterSecureStorage.setMockInitialValues({
+        'diary_dates': jsonEncode(['2026-11-26']),
+        'diary_2026-11-26': _entryJson('2026-11-26', 'a.jpg', ''),
+      });
+      storage.failReadAll = true;
+
+      final result = await BackupService.exportBackup(
+        storage: storage,
+        documents: documents,
+        outputDir: outputDir,
+      );
+
+      expect(result.entryCount, 1);
+      expect(result.complete, isFalse);
+      expect(result.file!.existsSync(), isTrue);
+    });
+
+    test('日付一覧も壊れていて日記が分からない場合は失敗し、zipを作らない', () async {
+      FlutterSecureStorage.setMockInitialValues({'diary_dates': 'broken'});
       storage.failReadAll = true;
 
       await expectLater(
@@ -153,15 +204,35 @@ void main() {
       expect(outputDir.listSync(), isEmpty);
     });
 
+    test('書き出せる日記が無ければzipを作らず、前回のzipも消さない', () async {
+      final old = File(
+          '${outputDir.path}/${BackupService.fileNamePrefix}20260101_000000.zip')
+        ..writeAsStringSync('old');
+      FlutterSecureStorage.setMockInitialValues({});
+
+      final result = await BackupService.exportBackup(
+        storage: storage,
+        documents: documents,
+        outputDir: outputDir,
+      );
+
+      expect(result.file, isNull);
+      expect(result.entryCount, 0);
+      expect(outputDir.listSync().map((e) => e.path), [old.path]);
+    });
+
     test('前回書き出したzipは次の書き出し時に片付ける', () async {
       final old = File(
           '${outputDir.path}/${BackupService.fileNamePrefix}20260101_000000.zip')
         ..writeAsStringSync('old');
       final other = File('${outputDir.path}/other.zip')
         ..writeAsStringSync('keep');
-      FlutterSecureStorage.setMockInitialValues({});
+      _createJpeg(documents, 'a.jpg');
+      FlutterSecureStorage.setMockInitialValues({
+        'diary_2026-11-26': _entryJson('2026-11-26', 'a.jpg', ''),
+      });
 
-      await BackupService.exportBackup(
+      final result = await BackupService.exportBackup(
         storage: storage,
         documents: documents,
         outputDir: outputDir,
@@ -170,13 +241,43 @@ void main() {
 
       expect(old.existsSync(), isFalse);
       expect(other.existsSync(), isTrue);
+      expect(result.file!.existsSync(), isTrue);
+    });
+
+    test('起動時などの片付けでは、一定時間より前の書き出しだけを消す', () async {
+      final now = DateTime(2026, 11, 28, 12);
+      final shareDir = Directory('${outputDir.path}/share_plus')..createSync();
+      File makeZip(Directory dir, String name, DateTime modified) =>
+          File('${dir.path}/${BackupService.fileNamePrefix}$name.zip')
+            ..writeAsStringSync('zip')
+            ..setLastModifiedSync(modified);
+      final stale = makeZip(outputDir, 'stale', DateTime(2026, 11, 28, 10));
+      final staleCopy = makeZip(shareDir, 'stale', DateTime(2026, 11, 28, 10));
+      final recent = makeZip(outputDir, 'recent', DateTime(2026, 11, 28, 11, 30));
+      final unrelated = File('${outputDir.path}/other.zip')
+        ..writeAsStringSync('keep')
+        ..setLastModifiedSync(DateTime(2026, 1, 1));
+
+      await BackupService.deleteOldExports(
+        outputDir,
+        olderThan: const Duration(hours: 1),
+        now: now,
+      );
+
+      expect(stale.existsSync(), isFalse);
+      expect(staleCopy.existsSync(), isFalse);
+      expect(recent.existsSync(), isTrue);
+      expect(unrelated.existsSync(), isTrue);
     });
   });
 
   group('読み込み・検証', () {
-    Future<Object?> readError(File zip) async {
+    Future<Object?> readError(File zip, {int? maxPhotoBytes}) async {
       try {
-        await BackupService.readBackup(zip.path);
+        await BackupService.readBackup(
+          zip.path,
+          maxPhotoBytes: maxPhotoBytes ?? BackupService.maxPhotoBytes,
+        );
         return null;
       } catch (e) {
         return e;
@@ -216,6 +317,20 @@ void main() {
       expect(await readError(zip), isA<BackupFormatException>());
     });
 
+    test('展開後サイズが上限を超える写真は受け付けない', () async {
+      final zip = writeZip(
+        manifestOf([
+          {'date': '2026-11-26', 'caption': '', 'photo': 'photos/a.jpg'},
+        ]),
+        photos: {'photos/a.jpg': _jpeg()},
+      );
+
+      final error = await readError(zip, maxPhotoBytes: 10);
+
+      expect(error, isA<BackupFormatException>());
+      expect((error as BackupFormatException).message, contains('大きすぎる'));
+    });
+
     test('不正な日付・写真のパス・重複した日付は受け付けない', () async {
       Future<Object?> errorFor(List<Map<String, dynamic>> entries) =>
           readError(writeZip(manifestOf(entries), photos: {
@@ -250,17 +365,26 @@ void main() {
       );
     });
 
+    test('未来の日付のエントリは除き、件数を返す', () async {
+      final today = _dateKey(DateTime.now());
+      final tomorrow = _dateKey(DateTime.now().add(const Duration(days: 1)));
+      final contents = await BackupService.readBackup(writeZip(
+        manifestOf([
+          {'date': today, 'caption': '', 'photo': 'photos/a.jpg'},
+          {'date': tomorrow, 'caption': '', 'photo': 'photos/a.jpg'},
+        ]),
+        photos: {'photos/a.jpg': _jpeg()},
+      ).path);
+
+      expect(contents.entries.map((e) => e.date), [today]);
+      expect(contents.skippedFutureCount, 1);
+    });
+
     test('保存済みと日付が重なる件数を数える', () async {
       FlutterSecureStorage.setMockInitialValues({
         'diary_2026-11-26': _entryJson('2026-11-26', 'x.jpg', ''),
       });
-      final contents = await BackupService.readBackup(writeZip(
-        manifestOf([
-          {'date': '2026-11-26', 'caption': '', 'photo': 'photos/a.jpg'},
-          {'date': '2026-11-27', 'caption': '', 'photo': 'photos/a.jpg'},
-        ]),
-        photos: {'photos/a.jpg': _jpeg()},
-      ).path);
+      final contents = await readTwoEntries();
 
       expect(contents.entries.length, 2);
       expect(await BackupService.countOverlapping(contents, storage), 1);
@@ -285,7 +409,7 @@ void main() {
       final notifier = await loadNotifier();
 
       await restore(
-          await BackupService.readBackup(exported.file.path), notifier);
+          await BackupService.readBackup(exported.file!.path), notifier);
 
       expect(container.read(diaryProvider).datesWithEntries, {'2026-11-26'});
       final sub = container.listen(diaryEntryProvider('2026-11-26'), (_, _) {});
@@ -317,21 +441,14 @@ void main() {
               .caption,
           '上書き前');
 
-      final contents = await BackupService.readBackup(writeZip(
-        manifestOf([
-          {'date': '2026-11-26', 'caption': '上書き後', 'photo': 'photos/a.jpg'},
-          {'date': '2026-11-27', 'caption': '追加', 'photo': 'photos/b.jpg'},
-        ]),
-        photos: {'photos/a.jpg': _jpeg(), 'photos/b.jpg': _jpeg()},
-      ).path);
-      await restore(contents, notifier);
+      await restore(await readTwoEntries(), notifier);
 
       expect(container.read(diaryProvider).datesWithEntries,
           {'2026-11-25', '2026-11-26', '2026-11-27'});
       expect(
           (await container.read(diaryEntryProvider('2026-11-26').future))!
               .caption,
-          '上書き後');
+          '一件目');
       // 上書きで使われなくなった写真は削除し、既存のエントリの写真は残す
       expect(File('${documents.path}/old.jpg').existsSync(), isFalse);
       expect(File('${documents.path}/keep.jpg').existsSync(), isTrue);
@@ -349,17 +466,26 @@ void main() {
       });
       final notifier = await loadNotifier();
 
-      await restore(
-        await BackupService.readBackup(writeZip(
-          manifestOf([
-            {'date': '2026-11-26', 'caption': '', 'photo': 'photos/a.jpg'},
-          ]),
-          photos: {'photos/a.jpg': _jpeg()},
-        ).path),
-        notifier,
-      );
+      await restore(await readTwoEntries(), notifier);
 
       expect(File('${documents.path}/old.jpg').existsSync(), isTrue);
+    });
+
+    test('未来の日付は何も書き込まずに拒否する', () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      final notifier = await loadNotifier();
+      final tomorrow = _dateKey(DateTime.now().add(const Duration(days: 1)));
+
+      await expectLater(
+        notifier.importEntries([
+          DiaryEntry(
+              photo: File('${documents.path}/a.jpg'),
+              caption: '',
+              date: tomorrow),
+        ]),
+        throwsArgumentError,
+      );
+      expect(storage.writtenKeys, isEmpty);
     });
 
     test('読めない写真が含まれていれば何も保存せず、保存した写真も片付ける', () async {
@@ -385,35 +511,99 @@ void main() {
       expect(container.read(diaryProvider).datesWithEntries, {'2026-11-25'});
     });
 
-    test('ストレージへの書き込みが途中で失敗したら、参照されない写真だけ片付ける', () async {
+    test('画素数が上限を超える写真はデコードせずに拒否する', () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      final notifier = await loadNotifier();
+      final contents = await readTwoEntries();
+
+      // テスト用の写真は4×4=16画素
+      final future = BackupService.restoreBackup(
+        contents,
+        documents: documents,
+        storage: storage,
+        importEntries: notifier.importEntries,
+        maxPhotoPixels: 15,
+      );
+
+      await expectLater(
+        future,
+        throwsA(isA<BackupFormatException>().having(
+            (e) => e.message, 'message', contains('大きすぎる'))),
+      );
+      expect(documentNames(), isEmpty);
+      expect(storage.writtenKeys, isEmpty);
+    });
+
+    test('書き込みが途中で失敗したら、書き込んだ分を元に戻し写真も片付ける', () async {
       _createJpeg(documents, 'keep.jpg');
+      final originalDates = jsonEncode(['2026-11-25']);
       FlutterSecureStorage.setMockInitialValues({
-        'diary_dates': jsonEncode(['2026-11-25']),
+        'diary_dates': originalDates,
         'diary_2026-11-25': _entryJson('2026-11-25', 'keep.jpg', '既存'),
       });
       final notifier = await loadNotifier();
       storage.writeFailures.add('diary_2026-11-27');
-      final contents = await BackupService.readBackup(writeZip(
-        manifestOf([
-          {'date': '2026-11-26', 'caption': '一件目', 'photo': 'photos/a.jpg'},
-          {'date': '2026-11-27', 'caption': '二件目', 'photo': 'photos/b.jpg'},
-        ]),
-        photos: {'photos/a.jpg': _jpeg(), 'photos/b.jpg': _jpeg()},
-      ).path);
 
-      await expectLater(restore(contents, notifier), throwsException);
+      await expectLater(
+          restore(await readTwoEntries(), notifier), throwsException);
       await pumpEventQueue();
 
-      // 書き込み済みの1件目の写真は残り、2件目の写真は削除される
+      // 書き込み済みだった1件目も取り消され、復元した写真はすべて削除される
+      expect(await storage.read(key: 'diary_2026-11-26'), isNull);
+      expect(await storage.read(key: 'diary_dates'), originalDates);
+      expect(documentNames(), {'keep.jpg'});
+      expect(container.read(diaryProvider).datesWithEntries, {'2026-11-25'});
+    });
+
+    test('上書きした既存の日記も、失敗時は元の内容に戻る', () async {
+      _createJpeg(documents, 'old.jpg');
+      final original = _entryJson('2026-11-26', 'old.jpg', '上書き前');
+      FlutterSecureStorage.setMockInitialValues({
+        'diary_dates': jsonEncode(['2026-11-26']),
+        'diary_2026-11-26': original,
+      });
+      final notifier = await loadNotifier();
+      storage.writeFailures.add('diary_dates');
+
+      await expectLater(
+          restore(await readTwoEntries(), notifier), throwsException);
+      await pumpEventQueue();
+
+      expect(await storage.read(key: 'diary_2026-11-26'), original);
+      expect(await storage.read(key: 'diary_2026-11-27'), isNull);
+      // 元のエントリが参照する写真は残り、復元した写真は削除される
+      expect(documentNames(), {'old.jpg'});
+    });
+
+    test('無関係な壊れたエントリがあっても、失敗時に復元した写真を片付ける', () async {
+      FlutterSecureStorage.setMockInitialValues({
+        'diary_dates': jsonEncode(['2026-11-20']),
+        'diary_2026-11-20': 'broken',
+      });
+      final notifier = await loadNotifier();
+      storage.writeFailures.add('diary_2026-11-27');
+
+      await expectLater(
+          restore(await readTwoEntries(), notifier), throwsException);
+
+      expect(documentNames(), isEmpty);
+    });
+
+    test('元に戻すことにも失敗したら、残ったエントリの写真は消さない', () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      final notifier = await loadNotifier();
+      storage.writeFailures.add('diary_2026-11-27');
+      storage.deleteFailures.add('diary_2026-11-26');
+
+      await expectLater(restore(await readTwoEntries(), notifier),
+          throwsA(isA<DiaryImportRollbackException>()));
+      await pumpEventQueue();
+
+      // 取り消せなかった1件目は残り、その写真も残る。2件目の写真は削除される
       final first =
           jsonDecode((await storage.read(key: 'diary_2026-11-26'))!)['photo'];
-      expect(documentNames(), {'keep.jpg', first});
-      // 既存のエントリは壊れず、書き込み済みのエントリは日付一覧に反映される
-      expect(
-          jsonDecode((await storage.read(key: 'diary_2026-11-25'))!)['caption'],
-          '既存');
-      expect(container.read(diaryProvider).datesWithEntries,
-          {'2026-11-25', '2026-11-26'});
+      expect(documentNames(), {first});
+      expect(container.read(diaryProvider).datesWithEntries, {'2026-11-26'});
     });
   });
 }
