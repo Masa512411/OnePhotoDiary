@@ -49,5 +49,7 @@
 	<string>アプリのロック解除に生体認証を使用します</string>
 	<key>NSCameraUsageDescription</key>
 	<string>今日の一枚を撮影するためにカメラを使用します</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>日記に使う写真をアルバムから選ぶために写真ライブラリを使用します</string>
 </dict>
 </plist>

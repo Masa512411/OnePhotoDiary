@@ -655,4 +655,149 @@ void main() {
       expect(recoverable.existsSync(), isTrue);
     });
   });
+
+  group('DiaryNotifier（過去日の保存・削除）', () {
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    late FakeSecureStorage fakeStorage;
+
+    Map<String, String> entryOf(String date, String photo) => {
+      'diary_$date': jsonEncode({'photo': photo, 'caption': '', 'date': date}),
+    };
+
+    Future<Set<String>> storedDates() async => Set<String>.from(
+      jsonDecode((await storage.read(key: 'diary_dates'))!) as List,
+    );
+
+    /// FakeSecureStorageを使うコンテナを作り直し、日付一覧の読み込みを待つ
+    Future<DiaryNotifier> useFakeStorage(Map<String, String> initial) async {
+      FlutterSecureStorage.setMockInitialValues(initial);
+      fakeStorage = FakeSecureStorage();
+      container = ProviderContainer(
+        overrides: [diaryStorageProvider.overrideWithValue(fakeStorage)],
+      );
+      addTearDown(container.dispose);
+      container.read(diaryProvider);
+      await pumpEventQueue();
+      return container.read(diaryProvider.notifier);
+    }
+
+    test('日付を指定するとその日のエントリとして保存する', () async {
+      final documents = setUpFakeDocumentsDirectory();
+      final notifier = await useFakeStorage({
+        'diary_dates': jsonEncode(['2026-01-02']),
+        ...entryOf('2026-01-02', 'b.jpg'),
+      });
+
+      await notifier.saveEntry(
+        photo: createPhoto(documents, 'a.jpg'),
+        caption: '過去の日',
+        date: '2026-01-01',
+      );
+
+      expect(await storedDates(), {'2026-01-01', '2026-01-02'});
+      expect(container.read(diaryProvider).datesWithEntries, {
+        '2026-01-01',
+        '2026-01-02',
+      });
+      expect(await notifier.hasEntryOn('2026-01-01'), isTrue);
+      expect(await notifier.hasEntryToday(), isFalse);
+      final saved = jsonDecode((await storage.read(key: 'diary_2026-01-01'))!);
+      expect(saved, {
+        'photo': 'a.jpg',
+        'caption': '過去の日',
+        'date': '2026-01-01',
+      });
+    });
+
+    test('削除するとエントリ・日付一覧・状態から日付が消え、写真も削除される', () async {
+      final documents = setUpFakeDocumentsDirectory();
+      final photo = createPhoto(documents, 'a.jpg');
+      final other = createPhoto(documents, 'b.jpg');
+      final notifier = await useFakeStorage({
+        'diary_dates': jsonEncode(['2026-01-01', today]),
+        ...entryOf('2026-01-01', 'a.jpg'),
+        ...entryOf(today, 'b.jpg'),
+      });
+
+      await notifier.deleteEntry('2026-01-01');
+
+      expect(await storage.read(key: 'diary_2026-01-01'), isNull);
+      expect(await storedDates(), {today});
+      expect(container.read(diaryProvider).datesWithEntries, {today});
+      expect(photo.existsSync(), isFalse);
+      expect(other.existsSync(), isTrue);
+
+      // 今日のエントリを削除すると連続記録・今日の記録の有無にも反映される
+      expect(container.read(diaryProvider).hasEntryToday, isTrue);
+      await notifier.deleteEntry(today);
+      expect(container.read(diaryProvider).datesWithEntries, isEmpty);
+      expect(container.read(diaryProvider).hasEntryToday, isFalse);
+      expect(container.read(diaryProvider).currentStreak, 0);
+      expect(other.existsSync(), isFalse);
+    });
+
+    test('削除した写真を他の日のエントリや撮影済み写真が参照していれば削除しない', () async {
+      final documents = setUpFakeDocumentsDirectory();
+      final shared = createPhoto(documents, 'shared.jpg');
+      final pending = createPhoto(documents, 'pending.jpg');
+      final notifier = await useFakeStorage({
+        'diary_dates': jsonEncode(['2026-01-01', '2026-01-02', '2026-01-03']),
+        ...entryOf('2026-01-01', 'shared.jpg'),
+        ...entryOf('2026-01-02', 'shared.jpg'),
+        ...entryOf('2026-01-03', 'pending.jpg'),
+        'pending_photos': jsonEncode([
+          {'name': 'pending.jpg', 'date': today},
+        ]),
+      });
+
+      await notifier.deleteEntry('2026-01-01');
+      await notifier.deleteEntry('2026-01-03');
+
+      expect(shared.existsSync(), isTrue);
+      expect(pending.existsSync(), isTrue);
+      expect(await storedDates(), {'2026-01-02'});
+    });
+
+    test('読み込み完了前に削除しても他の保存済みの日付を消さない', () async {
+      setUpFakeDocumentsDirectory();
+      FlutterSecureStorage.setMockInitialValues({
+        'diary_dates': jsonEncode(['2026-01-01', '2026-01-02']),
+        ...entryOf('2026-01-01', 'a.jpg'),
+        ...entryOf('2026-01-02', 'b.jpg'),
+      });
+      fakeStorage = FakeSecureStorage();
+      container = ProviderContainer(
+        overrides: [diaryStorageProvider.overrideWithValue(fakeStorage)],
+      );
+      addTearDown(container.dispose);
+
+      // 読み込みを待たずに削除する（メモリ上の状態は空）
+      expect(container.read(diaryProvider).datesWithEntries, isEmpty);
+      await container.read(diaryProvider.notifier).deleteEntry('2026-01-01');
+
+      expect(await storedDates(), {'2026-01-02'});
+      expect(container.read(diaryProvider).datesWithEntries, {'2026-01-02'});
+      // 遅れて完了した読み込みでも削除した日付は復活しない
+      await pumpEventQueue();
+      expect(container.read(diaryProvider).datesWithEntries, {'2026-01-02'});
+    });
+
+    test('削除時に日付一覧を読めなければ何も変更せずに失敗する', () async {
+      final documents = setUpFakeDocumentsDirectory();
+      final photo = createPhoto(documents, 'a.jpg');
+      final notifier = await useFakeStorage({
+        'diary_dates': jsonEncode(['2026-01-01']),
+        ...entryOf('2026-01-01', 'a.jpg'),
+      });
+      fakeStorage.failRead('diary_dates');
+
+      await expectLater(notifier.deleteEntry('2026-01-01'), throwsException);
+
+      expect(fakeStorage.writtenKeys, isEmpty);
+      expect(await storage.read(key: 'diary_2026-01-01'), isNotNull);
+      expect(await storedDates(), {'2026-01-01'});
+      expect(container.read(diaryProvider).datesWithEntries, {'2026-01-01'});
+      expect(photo.existsSync(), isTrue);
+    });
+  });
 }

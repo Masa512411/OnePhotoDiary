@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import '../providers/diary_provider.dart';
+import 'entry_actions.dart';
 
 class GalleryScreen extends ConsumerStatefulWidget {
   const GalleryScreen({super.key});
@@ -54,15 +55,21 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            dateLabel,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.bold,
-              color: Colors.black54,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  dateLabel,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black54,
+                  ),
+                ),
+              ),
+              EntryActionsMenu(entry: entry, color: Colors.black54),
+            ],
           ),
-          const SizedBox(height: 8),
           GestureDetector(
             onTap: () => _openFullscreen(entry),
             child: ClipRRect(
