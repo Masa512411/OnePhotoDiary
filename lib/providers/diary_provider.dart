@@ -316,10 +316,15 @@ final allDiaryEntriesProvider = FutureProvider<List<DiaryEntry>>((ref) async {
 /// 保存済みの日記エントリが参照している写真のファイル名一覧を返す
 /// （写真ファイル削除時に、保存済みエントリの写真を誤って消さないために使う）
 /// 一覧に無くてもdiary_YYYY-MM-DDのキーが残っているエントリも含める
+/// キーからの復元に失敗した場合は参照漏れがありうるため例外を投げる
+/// （呼び出し側で写真の削除やデータの消去を見送れるようにするため）
 Future<Set<String>> loadReferencedPhotoNames({
   FlutterSecureStorage storage = _defaultDiaryStorage,
 }) async {
   final stored = await _readStoredDates(storage);
+  if (!stored.recovered) {
+    throw StateError('日記のエントリ一覧を確認できないため、参照写真を確定できません');
+  }
   final names = <String>{};
   for (final date in stored.dates) {
     final json = await storage.read(key: 'diary_$date');

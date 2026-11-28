@@ -630,5 +630,29 @@ void main() {
       );
       expect(await storedDates(), {'2026-01-01', today});
     });
+
+    test('readAllに失敗したら参照写真を確定できないため何も削除しない', () async {
+      final documents = setUpFakeDocumentsDirectory();
+      useFakeStorage({
+        'diary_dates': jsonEncode(['2026-01-01']),
+        ...entryOf('2026-01-01', 'a.jpg'),
+        // 一覧から漏れているエントリ
+        ...entryOf('2026-01-02', 'b.jpg'),
+      });
+      fakeStorage.failReadAll = true;
+      final unreferenced = createPhoto(documents, 'c.jpg');
+      final recoverable = createPhoto(documents, 'b.jpg');
+
+      await expectLater(
+        loadReferencedPhotoNames(storage: fakeStorage),
+        throwsStateError,
+      );
+      await deletePhotosIfUnreferenced(
+        [unreferenced, recoverable],
+        storage: fakeStorage,
+      );
+      expect(unreferenced.existsSync(), isTrue);
+      expect(recoverable.existsSync(), isTrue);
+    });
   });
 }
