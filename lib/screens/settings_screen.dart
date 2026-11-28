@@ -4,10 +4,24 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../providers/diary_provider.dart';
 import '../providers/reminder_provider.dart';
 import '../services/backup_service.dart';
 import '../services/photo_storage.dart';
+
+/// プライバシーポリシーの公開URL
+final privacyPolicyUrl = Uri.parse(
+  'https://github.com/Masa512411/OnePhotoDiary/blob/main/docs/privacy_policy.md',
+);
+
+/// URLを外部ブラウザで開く関数のProvider（テストで差し替え可能にする）
+/// 開けなかった場合はfalseを返すか例外を投げる
+final urlLauncherProvider = Provider<Future<bool> Function(Uri)>(
+  // canLaunchUrlを使わないため、AndroidのqueriesやiOSのLSApplicationQueriesSchemesは不要
+  (ref) =>
+      (url) => launchUrl(url, mode: LaunchMode.externalApplication),
+);
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -238,6 +252,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _showMessage('${contents.entries.length}件の日記を復元しました');
   }
 
+  /// プライバシーポリシーを外部ブラウザで開く
+  Future<void> _openPrivacyPolicy() async {
+    bool opened;
+    try {
+      opened = await ref.read(urlLauncherProvider)(privacyPolicyUrl);
+    } catch (e) {
+      debugPrint('プライバシーポリシーを開けませんでした: $e');
+      opened = false;
+    }
+    if (!opened) _showMessage('プライバシーポリシーを開けませんでした');
+  }
+
   /// ウィジェットの画面上の位置（iPadの共有シートの表示位置に使う）
   static Rect? _originOf(BuildContext context) {
     final box = context.findRenderObject() as RenderBox?;
@@ -329,6 +355,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               '機種変更や端末の紛失に備えて、定期的に書き出しておくことをおすすめします。',
               style: TextStyle(fontSize: 12, color: Colors.black45),
             ),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text(
+              'このアプリについて',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.black54,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          ListTile(
+            title: const Text('プライバシーポリシー'),
+            trailing: const Icon(Icons.open_in_new),
+            onTap: _openPrivacyPolicy,
           ),
         ],
       ),
